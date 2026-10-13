@@ -106,3 +106,20 @@ install(DIRECTORY "${PROJECT_BUILD_DIR}/${FLUTTER_ASSET_DIR_NAME}"
 install(FILES "${AOT_LIBRARY}" DESTINATION "${INSTALL_BUNDLE_DATA_DIR}"
   CONFIGURATIONS Profile;Release
   COMPONENT Runtime)
+
+# Bundle the frozen Python worker next to the Flutter executable. Release builds
+# deliberately fail when the worker has not been built first; Debug may fall
+# back to the source worker and a local Python environment.
+set(WORKER_RELEASE_PATH
+  "${CMAKE_SOURCE_DIR}/../backend/dist/release/universal_converter_worker.exe")
+set(WORKER_DEBUG_PATH
+  "${CMAKE_SOURCE_DIR}/../backend/dist/debug/universal_converter_worker.exe")
+install(PROGRAMS "${WORKER_RELEASE_PATH}"
+  DESTINATION "${CMAKE_INSTALL_PREFIX}/worker"
+  CONFIGURATIONS Profile;Release
+  COMPONENT Runtime)
+install(PROGRAMS "${WORKER_DEBUG_PATH}"
+  DESTINATION "${CMAKE_INSTALL_PREFIX}/worker"
+  CONFIGURATIONS Debug
+  COMPONENT Runtime
+  OPTIONAL)

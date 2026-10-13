@@ -8,7 +8,7 @@ from zipfile import ZipFile
 
 import pytest
 
-fitz = pytest.importorskip("fitz")
+fitz = pytest.importorskip("pymupdf")
 pytest.importorskip("pdf2docx")
 from backend.models import ConversionRequest
 from backend.registry import create_default_engine

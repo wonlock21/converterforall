@@ -6,7 +6,7 @@ import os
 import tempfile
 from pathlib import Path
 
-import fitz
+import pymupdf as fitz
 from pdf2docx import Converter as Pdf2DocxConverter
 
 from backend.converters.base import Converter

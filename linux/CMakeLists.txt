@@ -126,3 +126,19 @@ if(NOT CMAKE_BUILD_TYPE MATCHES "Debug")
   install(FILES "${AOT_LIBRARY}" DESTINATION "${INSTALL_BUNDLE_LIB_DIR}"
     COMPONENT Runtime)
 endif()
+
+# Release/Profile bundles must contain a self-contained worker. Debug builds can
+# use a frozen debug worker when present or fall back to source Python.
+set(WORKER_RELEASE_PATH
+  "${CMAKE_SOURCE_DIR}/../backend/dist/release/universal_converter_worker")
+set(WORKER_DEBUG_PATH
+  "${CMAKE_SOURCE_DIR}/../backend/dist/debug/universal_converter_worker")
+install(PROGRAMS "${WORKER_RELEASE_PATH}"
+  DESTINATION "${CMAKE_INSTALL_PREFIX}/worker"
+  CONFIGURATIONS Profile;Release
+  COMPONENT Runtime)
+install(PROGRAMS "${WORKER_DEBUG_PATH}"
+  DESTINATION "${CMAKE_INSTALL_PREFIX}/worker"
+  CONFIGURATIONS Debug
+  COMPONENT Runtime
+  OPTIONAL)

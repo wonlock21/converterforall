@@ -14,21 +14,39 @@ typedef ProcessStarter =
       Map<String, String>? environment,
     });
 
-class WindowsPythonConverterEngine implements ConverterEngine {
-  WindowsPythonConverterEngine({
+class _WorkerLaunchConfiguration {
+  const _WorkerLaunchConfiguration({
+    required this.executable,
+    required this.arguments,
+    required this.workingDirectory,
+  });
+
+  final String executable;
+  final List<String> arguments;
+  final String workingDirectory;
+}
+
+class DesktopPythonConverterEngine implements ConverterEngine {
+  DesktopPythonConverterEngine({
+    String? workerExecutable,
     String? pythonExecutable,
     String? projectRoot,
     Map<String, String>? environment,
     ProcessStarter? processStarter,
-  }) : _projectRoot = projectRoot ?? _findProjectRoot(),
+    bool? isRelease,
+  }) : _configuredWorkerExecutable = workerExecutable,
        _configuredPythonExecutable = pythonExecutable,
+       _projectRoot = projectRoot ?? _findProjectRoot(),
        _environment = environment,
-       _processStarter = processStarter ?? Process.start;
+       _processStarter = processStarter ?? Process.start,
+       _isRelease = isRelease ?? const bool.fromEnvironment('dart.vm.product');
 
-  final String _projectRoot;
+  final String? _configuredWorkerExecutable;
   final String? _configuredPythonExecutable;
+  final String _projectRoot;
   final Map<String, String>? _environment;
   final ProcessStarter _processStarter;
+  final bool _isRelease;
   final Map<String, Completer<ConversionResult>> _pendingRequests = {};
   final List<String> _recentErrorLines = [];
 
@@ -77,7 +95,7 @@ class WindowsPythonConverterEngine implements ConverterEngine {
     } on Object catch (error) {
       _pendingRequests.remove(requestId);
       throw ConverterEngineException(
-        'Dönüştürme isteği Python motoruna gönderilemedi: $error',
+        'Dönüştürme isteği yerel motora gönderilemedi: $error',
       );
     }
 
@@ -88,7 +106,7 @@ class WindowsPythonConverterEngine implements ConverterEngine {
     final write = _writeQueue.then((_) async {
       if (!identical(_process, process)) {
         throw const ConverterEngineException(
-          'Python motoru istek gönderilmeden önce kapandı.',
+          'Yerel motor istek gönderilmeden önce kapandı.',
         );
       }
       process.stdin.writeln(jsonEncode(message));
@@ -117,10 +135,12 @@ class WindowsPythonConverterEngine implements ConverterEngine {
     _startingProcess = start;
     try {
       return await start;
+    } on ConverterEngineException {
+      rethrow;
     } on ProcessException catch (error) {
       throw ConverterEngineException(
-        'Python motoru başlatılamadı (${error.message}). '
-        'Python ortamını ve backend bağımlılıklarını kontrol edin.',
+        'Yerel dönüştürme motoru başlatılamadı (${error.message}). '
+        'Uygulama paketinin eksiksiz olduğunu kontrol edin.',
       );
     } finally {
       if (identical(_startingProcess, start)) {
@@ -130,14 +150,11 @@ class WindowsPythonConverterEngine implements ConverterEngine {
   }
 
   Future<Process> _startProcess() async {
-    final executable =
-        _configuredPythonExecutable ??
-        Platform.environment['UNIVERSAL_CONVERTER_PYTHON'] ??
-        _discoverPythonExecutable(_projectRoot);
+    final launch = _resolveWorkerLaunch();
     final process = await _processStarter(
-      executable,
-      const ['-m', 'backend.worker'],
-      workingDirectory: _projectRoot,
+      launch.executable,
+      launch.arguments,
+      workingDirectory: launch.workingDirectory,
       environment: _environment,
     );
     _process = process;
@@ -154,6 +171,77 @@ class WindowsPythonConverterEngine implements ConverterEngine {
     return process;
   }
 
+  _WorkerLaunchConfiguration _resolveWorkerLaunch() {
+    final configuredWorker =
+        _configuredWorkerExecutable ??
+        Platform.environment['UNIVERSAL_CONVERTER_WORKER'];
+    if (configuredWorker != null && configuredWorker.isNotEmpty) {
+      return _nativeWorkerConfiguration(configuredWorker);
+    }
+
+    final packagedWorker = _packagedWorkerPath();
+    if (File(packagedWorker).existsSync()) {
+      return _nativeWorkerConfiguration(packagedWorker);
+    }
+
+    if (_isRelease) {
+      throw ConverterEngineException(
+        'Paketlenmiş dönüştürme motoru bulunamadı: $packagedWorker',
+      );
+    }
+
+    final stagedWorker =
+        '$_projectRoot${Platform.pathSeparator}backend'
+        '${Platform.pathSeparator}dist${Platform.pathSeparator}debug'
+        '${Platform.pathSeparator}${_workerFileName()}';
+    if (File(stagedWorker).existsSync()) {
+      return _nativeWorkerConfiguration(stagedWorker);
+    }
+
+    final python =
+        _configuredPythonExecutable ??
+        Platform.environment['UNIVERSAL_CONVERTER_PYTHON'] ??
+        _discoverPythonExecutable(_projectRoot);
+    return _WorkerLaunchConfiguration(
+      executable: python,
+      arguments: const ['-m', 'backend.worker'],
+      workingDirectory: _projectRoot,
+    );
+  }
+
+  _WorkerLaunchConfiguration _nativeWorkerConfiguration(String executable) {
+    final worker = File(executable).absolute;
+    if (!worker.existsSync()) {
+      throw ConverterEngineException(
+        'Dönüştürme motoru dosyası bulunamadı: ${worker.path}',
+      );
+    }
+    return _WorkerLaunchConfiguration(
+      executable: worker.path,
+      arguments: const [],
+      workingDirectory: worker.parent.path,
+    );
+  }
+
+  static String _packagedWorkerPath() {
+    final executableDirectory = File(Platform.resolvedExecutable).parent;
+    final workerDirectory = Platform.isMacOS
+        ? Directory(
+            '${executableDirectory.parent.path}${Platform.pathSeparator}'
+            'Resources${Platform.pathSeparator}worker',
+          )
+        : Directory(
+            '${executableDirectory.path}${Platform.pathSeparator}worker',
+          );
+    return '${workerDirectory.path}${Platform.pathSeparator}${_workerFileName()}';
+  }
+
+  static String _workerFileName() {
+    return Platform.isWindows
+        ? 'universal_converter_worker.exe'
+        : 'universal_converter_worker';
+  }
+
   void _handleProtocolLine(String line) {
     try {
       final decoded = jsonDecode(line);
@@ -165,7 +253,7 @@ class WindowsPythonConverterEngine implements ConverterEngine {
       if (requestId == null) {
         final message =
             decoded['message'] as String? ??
-            'Python motoru beklenmeyen şekilde durdu.';
+            'Yerel dönüştürme motoru beklenmeyen şekilde durdu.';
         _failAll(ConverterEngineException(message));
         return;
       }
@@ -176,7 +264,7 @@ class WindowsPythonConverterEngine implements ConverterEngine {
       final completer = _pendingRequests.remove(requestId);
       if (completer == null) {
         developer.log(
-          'Bilinmeyen Python yanıt kimliği: $requestId',
+          'Bilinmeyen worker yanıt kimliği: $requestId',
           name: 'universal_converter.worker',
         );
         return;
@@ -193,14 +281,14 @@ class WindowsPythonConverterEngine implements ConverterEngine {
 
   void _handleProtocolFailure(Object error, StackTrace stackTrace) {
     developer.log(
-      'Python motorundan geçersiz protokol mesajı alındı.',
+      'Yerel motordan geçersiz protokol mesajı alındı.',
       name: 'universal_converter.worker',
       error: error,
       stackTrace: stackTrace,
     );
     _failAll(
       const ConverterEngineException(
-        'Python motorundan geçersiz bir yanıt alındı.',
+        'Yerel dönüştürme motorundan geçersiz bir yanıt alındı.',
       ),
     );
     _process?.kill();
@@ -234,7 +322,7 @@ class WindowsPythonConverterEngine implements ConverterEngine {
           : ' Son motor mesajı: ${_recentErrorLines.last}';
       _failAll(
         ConverterEngineException(
-          'Python motoru beklenmeyen şekilde kapandı '
+          'Yerel dönüştürme motoru beklenmeyen şekilde kapandı '
           '(çıkış kodu $exitCode).$detail',
         ),
       );
@@ -290,14 +378,14 @@ class WindowsPythonConverterEngine implements ConverterEngine {
       '$projectRoot${Platform.pathSeparator}.venv${Platform.pathSeparator}'
           'Scripts${Platform.pathSeparator}python.exe',
       '$projectRoot${Platform.pathSeparator}.venv${Platform.pathSeparator}'
-          'bin${Platform.pathSeparator}python.exe',
+          'bin${Platform.pathSeparator}python',
     ];
     for (final candidate in candidates) {
       if (File(candidate).existsSync()) {
         return candidate;
       }
     }
-    return 'python';
+    return Platform.isWindows ? 'python' : 'python3';
   }
 
   static String _findProjectRoot() {
@@ -311,7 +399,7 @@ class WindowsPythonConverterEngine implements ConverterEngine {
       File(Platform.resolvedExecutable).parent.path,
     ]) {
       var directory = Directory(start).absolute;
-      for (var depth = 0; depth < 8; depth++) {
+      for (var depth = 0; depth < 10; depth++) {
         final worker = File(
           '${directory.path}${Platform.pathSeparator}backend'
           '${Platform.pathSeparator}worker.py',
