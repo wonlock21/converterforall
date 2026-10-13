@@ -1,0 +1,26 @@
+import 'conversion_models.dart';
+import 'converter_engine.dart';
+
+class UnsupportedConverterEngine implements ConverterEngine {
+  const UnsupportedConverterEngine(this.platformName);
+
+  final String platformName;
+
+  @override
+  bool supports(ConversionFormat source, ConversionFormat target) => false;
+
+  @override
+  Future<void> close() async {}
+
+  @override
+  Future<ConversionResult> convert(ConversionRequest request) async {
+    return ConversionResult(
+      success: false,
+      message: '$platformName için dönüştürme motoru henüz eklenmedi.',
+      durationMs: 0,
+      inputPath: request.inputPath,
+      outputPath: request.outputPath,
+      errorCode: 'platform_not_supported',
+    );
+  }
+}
