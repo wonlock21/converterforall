@@ -1,9 +1,19 @@
 # Universal Converter
 
-Universal Converter; PDF dosyalarını sunucuya göndermeden, tamamen cihaz üzerinde
-DOCX biçimine dönüştüren bir Flutter masaüstü uygulamasıdır. Aynı Flutter kod tabanı
+Universal Converter; PDF ve görsel dosyalarını sunucuya göndermeden, tamamen cihaz
+üzerinde dönüştüren bir Flutter masaüstü uygulamasıdır. Aynı Flutter kod tabanı
 Windows, macOS ve Linux üzerinde çalışır. Dönüştürme motoru Python ile geliştirilmiş,
 JSON Lines üzerinden haberleşen bağımsız bir worker sürecidir.
+
+Desteklenen dönüşümler:
+
+- PDF → DOCX ve UTF-8 TXT
+- PDF → JPG, JPEG veya PNG (bütün sayfalar)
+- JPG, JPEG veya PNG → PDF
+- JPG/JPEG → PNG ve PNG → JPG/JPEG
+
+Taranmış PDF dosyalarında OCR uygulanmaz; PDF → TXT yalnızca seçilebilir metni
+çıkarır.
 
 Son kullanıcı dağıtımlarında Python, pip veya proje kaynak kodu gerekmez. Python
 worker her hedef işletim sisteminde PyInstaller ile bağımsız bir executable olarak
@@ -21,7 +31,11 @@ Flutter UI
                   ▼
 PyInstaller worker executable
    └── ConversionEngine
-         └── PdfToDocxConverter (PyMuPDF + pdf2docx)
+         ├── PdfToDocxConverter (PyMuPDF + pdf2docx)
+         ├── PdfToTextConverter (PyMuPDF)
+         ├── PdfToImageConverter (PyMuPDF)
+         ├── ImageToPdfConverter (Pillow)
+         └── RasterImageConverter (Pillow)
 ```
 
 - HTTP, REST API, FastAPI, sunucu veya bulut servisi kullanılmaz.
@@ -38,11 +52,14 @@ Arayüz Material 3 tabanlı, responsive ve tek ekranlıdır. Açık/koyu tema re
 dosya seçiciye ek olarak sürükle-bırak kullanılabilir; mobil boyutlarda dosya seçici
 akışı korunur.
 
-Seçilen dosyanın türü ve boyutu gösterilir, kaynak format uzantıdan belirlenir ve hedef
-listesi `ConverterEngine.supports()` sonucuna göre oluşturulur. Varsayılan çıktı konumu
-kaynak dosyanın klasörüdür. Var olan bir dosyanın üzerine yazmadan önce ayrıca onay
-istenir. Başarılı sonuçlarda masaüstü işletim sisteminin yerel dosya açma ve klasörde
-gösterme komutları kullanılır.
+Kaynak ve hedef format alanları dosya seçilmeden önce de görünür. Kullanıcı önce
+formatları veya önce dosyayı seçebilir. Kaynak değiştiğinde hedef listesi worker'ın
+`capabilities` yanıtına göre yenilenir; dosya seçildiğinde kaynak uzantısı otomatik
+algılanır. Böylece desteklenen dönüşüm çiftleri Flutter içinde ikinci bir sabit liste
+olarak tutulmaz. Seçilen dosyanın türü, boyutu ve formata uygun simgesi gösterilir.
+Varsayılan çıktı konumu kaynak dosyanın klasörüdür. Var olan bir dosyanın üzerine
+yazmadan önce ayrıca onay istenir. Başarılı sonuçlarda tek veya çoklu çıktı listelenir;
+ilk dosya açılabilir ve çıktı klasörü gösterilebilir.
 
 Flutter tarafına eklenen tek yeni runtime bağımlılığı `desktop_drop` paketidir. Paket
 yalnızca işletim sisteminden bırakılan dosya yolunu alır; dosya içeriğini bir sunucuya
@@ -244,6 +261,7 @@ Runtime bağımlılıkları:
 
 - `pdf2docx==0.5.8`
 - `PyMuPDF>=1.24,<2`
+- `Pillow>=10,<13`
 - `pdf2docx` üzerinden gelen NumPy, OpenCV ve python-docx bileşenleri
 
 CI her platform/mimaride bağımlılıkları kurar, testleri çalıştırır ve frozen worker'ı
@@ -252,6 +270,19 @@ farklı Windows sürümleri, gerçek Intel/Apple Silicon Mac'ler veya farklı Li
 dağıtımlarında kullanıcı testi yapılmış olduğu anlamına gelmez.
 
 ## Flutter–Python protokolü
+
+Uygulama worker açıldıktan sonra önce desteklenen dönüşümleri sorgular:
+
+```json
+{"id":"capabilities-1","action":"capabilities"}
+```
+
+```json
+{"id":"capabilities-1","type":"capabilities_result","success":true,"conversions":[{"source_format":"pdf","target_format":"docx"},{"source_format":"pdf","target_format":"png"}],"error":null}
+```
+
+Liste registry'den üretildiği için Python converter kayıtları protokolün tek doğruluk
+kaynağıdır. Her istek benzersiz bir `id` taşır ve aynı `id` ile yanıtlanır.
 
 Flutter her isteği stdin'e tek satırlık JSON olarak gönderir:
 
@@ -268,6 +299,7 @@ Worker aynı `id` değerine sahip tek satırlık JSON yanıtını stdout'a yazar
   "success": true,
   "input_path": "/files/source.pdf",
   "output_path": "/files/result.docx",
+  "output_paths": ["/files/result.docx"],
   "source_format": "pdf",
   "target_format": "docx",
   "duration_ms": 845,
@@ -276,9 +308,20 @@ Worker aynı `id` değerine sahip tek satırlık JSON yanıtını stdout'a yazar
 }
 ```
 
-PDF modülü bozuk, boş veya parola korumalı girdileri reddeder. Dönüşüm hedef klasörde
-geçici bir DOCX dosyasına yapılır ve yalnızca başarılı olduğunda atomik olarak son
-adına taşınır. Kaynak PDF değiştirilmez.
+`output_path` eski tek çıktılı istemciler için ilk dosyayı göstermeye devam eder.
+`output_paths` her zaman üretilen dosyaların tamamını taşır. Çok sayfalı bir PDF için
+örneğin `document_page_001.png`, `document_page_002.png` adları üretilir; tek sayfada
+seçilen çıktı adı korunur. Dönüşüm başlamadan bütün hedefler için çakışma kontrolü
+yapılır. Aşamalı geçici dosyalar yalnızca tüm sayfalar başarıyla üretildiğinde son
+adlarına alınır; hata halinde geçici ve yarım çıktılar temizlenir.
+
+PDF modülleri bozuk, boş veya parola korumalı girdileri; görsel modülleri bozuk ya da
+uzantısıyla uyuşmayan verileri reddeder. PNG şeffaflığı PDF için beyaz zemin üzerinde
+birleştirilir. PNG → JPG/JPEG dönüşümünde de aynı beyaz arka plan kullanılır. EXIF
+orientation uygulanır, piksel boyutları yön dönüşümü dışında korunur ve görseller
+yeniden boyutlandırılmaz. JPEG → PNG dönüşümü JPEG sıkıştırmasında kaybolmuş ayrıntıyı
+geri getirmez. Bütün dönüşümler hedef klasörde geçici dosyalara yapılır. Kaynak dosya
+değiştirilmez.
 
 ## Testler
 
@@ -299,9 +342,13 @@ python tool/build_worker.py release
 ## Yeni dönüştürücü eklemek
 
 1. `backend/converters/base.py` içindeki `Converter` sözleşmesini uygulayın.
-2. Yeni modülü `backend/registry.py` içindeki kayıt listesine ekleyin.
-3. Formatı Flutter `ConversionFormat` enum'una ve `supports()` kontrolüne ekleyin.
-4. Doğrulama, gerçek çıktı ve frozen worker testlerini genişletin.
+2. Tek çıktı için varsayılan `planned_output_paths()` yeterlidir. Birden fazla dosya
+   üretilecekse bütün hedefleri bu metotta önceden bildirin.
+3. Çıktıları önce geçici kardeş dosyalara yazın ve
+   `backend/converters/output_transaction.py` yardımcısıyla yayınlayın.
+4. Yeni modülü `backend/registry.py` içindeki kayıt listesine ekleyin. Worker'ın
+   `capabilities` yanıtı ve Flutter hedef listesi otomatik güncellenir.
+5. Doğrulama, gerçek çıktı, hata temizliği ve frozen worker testlerini genişletin.
 
 Yeni format eklenirken UI'nın veya JSON Lines taşıma katmanının yeniden yazılması
 gerekmez.
@@ -309,6 +356,8 @@ gerekmez.
 ## Önemli dosyalar
 
 - `backend/worker.py`: JSON Lines worker protokolü
+- `backend/registry.py`: Desteklenen dönüşümlerin merkezi kaydı
+- `backend/converters/`: Birbirinden bağımsız dönüşüm modülleri
 - `backend/universal_converter_worker.spec`: PyInstaller tanımı
 - `tool/build_worker.py`: platforma özgü worker build ve smoke testi
 - `tool/package_release.py`: ZIP, DMG, tar.gz ve AppImage paketleme

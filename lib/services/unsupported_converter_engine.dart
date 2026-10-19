@@ -7,7 +7,7 @@ class UnsupportedConverterEngine implements ConverterEngine {
   final String platformName;
 
   @override
-  bool supports(ConversionFormat source, ConversionFormat target) => false;
+  Future<List<SupportedConversion>> getSupportedConversions() async => const [];
 
   @override
   Future<void> close() async {}

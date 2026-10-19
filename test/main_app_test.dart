@@ -14,9 +14,12 @@ class _ThemeTestEngine implements ConverterEngine {
   }
 
   @override
-  bool supports(ConversionFormat source, ConversionFormat target) {
-    return source == ConversionFormat.pdf && target == ConversionFormat.docx;
-  }
+  Future<List<SupportedConversion>> getSupportedConversions() async => const [
+    SupportedConversion(
+      source: ConversionFormat.pdf,
+      target: ConversionFormat.docx,
+    ),
+  ];
 }
 
 void main() {

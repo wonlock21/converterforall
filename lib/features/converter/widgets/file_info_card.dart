@@ -31,7 +31,8 @@ class FileInfoCard extends StatelessWidget {
               borderRadius: BorderRadius.circular(17),
             ),
             child: Icon(
-              Icons.picture_as_pdf_outlined,
+              _iconForExtension(file.extension),
+              key: const Key('selected_file_type_icon'),
               color: colorScheme.onPrimaryContainer,
               size: 30,
             ),
@@ -83,5 +84,22 @@ class FileInfoCard extends StatelessWidget {
     final megabytes = kilobytes / 1024;
     if (megabytes < 1024) return '${megabytes.toStringAsFixed(1)} MB';
     return '${(megabytes / 1024).toStringAsFixed(1)} GB';
+  }
+
+  static IconData _iconForExtension(String extension) {
+    switch (extension.toLowerCase()) {
+      case 'pdf':
+        return Icons.picture_as_pdf_outlined;
+      case 'docx':
+        return Icons.description_outlined;
+      case 'jpg':
+      case 'jpeg':
+      case 'png':
+        return Icons.image_outlined;
+      case 'txt':
+        return Icons.text_snippet_outlined;
+      default:
+        return Icons.insert_drive_file_outlined;
+    }
   }
 }

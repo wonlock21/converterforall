@@ -13,6 +13,8 @@ class ConverterCard extends StatelessWidget {
   const ConverterCard({
     required this.compact,
     required this.inputFile,
+    required this.availableSources,
+    required this.sourceFormat,
     required this.availableTargets,
     required this.targetFormat,
     required this.outputDirectory,
@@ -20,6 +22,7 @@ class ConverterCard extends StatelessWidget {
     required this.usesSourceDirectory,
     required this.overwrite,
     required this.isConverting,
+    required this.isLoadingFormats,
     required this.canConvert,
     required this.canSelectFiles,
     required this.dragAndDropEnabled,
@@ -27,6 +30,7 @@ class ConverterCard extends StatelessWidget {
     required this.onChooseFile,
     required this.onFileDropped,
     required this.onRemoveFile,
+    required this.onSourceChanged,
     required this.onTargetChanged,
     required this.onChooseOutputDirectory,
     required this.onOverwriteChanged,
@@ -38,13 +42,16 @@ class ConverterCard extends StatelessWidget {
 
   final bool compact;
   final SelectedInputFile? inputFile;
+  final List<ConversionFormat> availableSources;
+  final ConversionFormat? sourceFormat;
   final List<ConversionFormat> availableTargets;
-  final ConversionFormat targetFormat;
+  final ConversionFormat? targetFormat;
   final String? outputDirectory;
   final String? outputDirectoryName;
   final bool usesSourceDirectory;
   final bool overwrite;
   final bool isConverting;
+  final bool isLoadingFormats;
   final bool canConvert;
   final bool canSelectFiles;
   final bool dragAndDropEnabled;
@@ -52,6 +59,7 @@ class ConverterCard extends StatelessWidget {
   final VoidCallback onChooseFile;
   final ValueChanged<String> onFileDropped;
   final VoidCallback onRemoveFile;
+  final ValueChanged<ConversionFormat> onSourceChanged;
   final ValueChanged<ConversionFormat> onTargetChanged;
   final VoidCallback onChooseOutputDirectory;
   final ValueChanged<bool> onOverwriteChanged;
@@ -83,15 +91,18 @@ class ConverterCard extends StatelessWidget {
                       onReplace: onChooseFile,
                     ),
             ),
-            if (input != null && availableTargets.isNotEmpty) ...[
-              const SizedBox(height: 26),
-              FormatSelector(
-                sourceFormat: input.sourceFormat,
-                availableTargets: availableTargets,
-                targetFormat: targetFormat,
-                enabled: !isConverting,
-                onTargetChanged: onTargetChanged,
-              ),
+            const SizedBox(height: 26),
+            FormatSelector(
+              availableSources: availableSources,
+              sourceFormat: sourceFormat,
+              availableTargets: availableTargets,
+              targetFormat: targetFormat,
+              enabled: !isConverting && !isLoadingFormats,
+              isLoading: isLoadingFormats,
+              onSourceChanged: onSourceChanged,
+              onTargetChanged: onTargetChanged,
+            ),
+            if (input != null) ...[
               const SizedBox(height: 26),
               if (directory != null && outputDirectoryName != null)
                 OutputLocationSelector(

@@ -15,8 +15,11 @@ class RecordingConverter(Converter):
     def validate_input(self, input_path: Path) -> None:
         self.validated = True
 
-    def convert(self, input_path: Path, output_path: Path) -> None:
+    def convert(
+        self, input_path: Path, output_path: Path, *, overwrite: bool = False
+    ) -> tuple[Path, ...]:
         output_path.write_bytes(b"docx")
+        return (output_path,)
 
 
 def request(input_path: Path, output_path: Path, *, overwrite: bool = False):
@@ -39,6 +42,7 @@ def test_engine_runs_registered_converter(tmp_path: Path) -> None:
 
     assert result.success is True
     assert result.error_code is None
+    assert result.output_paths == (str(target.resolve()),)
     assert converter.validated is True
     assert target.read_bytes() == b"docx"
 
@@ -105,4 +109,3 @@ def test_engine_reports_unsupported_conversion(tmp_path: Path) -> None:
 
     assert result.success is False
     assert result.error_code == "unsupported_conversion"
-

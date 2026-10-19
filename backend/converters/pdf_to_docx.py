@@ -2,15 +2,14 @@
 
 from __future__ import annotations
 
-import os
-import tempfile
 from pathlib import Path
 
-import pymupdf as fitz
 from pdf2docx import Converter as Pdf2DocxConverter
 
 from backend.converters.base import Converter
-from backend.errors import ConversionError, ValidationError
+from backend.converters.output_transaction import publish_outputs, temporary_path_for
+from backend.converters.pdf_common import validate_pdf
+from backend.errors import ConversionError
 
 
 class PdfToDocxConverter(Converter):
@@ -18,32 +17,16 @@ class PdfToDocxConverter(Converter):
     target_format = "docx"
 
     def validate_input(self, input_path: Path) -> None:
-        try:
-            with fitz.open(input_path) as document:
-                if document.needs_pass:
-                    raise ValidationError(
-                        "password_protected_pdf",
-                        "Password-protected PDF files are not supported.",
-                    )
-                if document.page_count < 1:
-                    raise ValidationError("empty_pdf", "The PDF does not contain any pages.")
-        except ValidationError:
-            raise
-        except (fitz.FileDataError, RuntimeError, ValueError) as error:
-            raise ValidationError("invalid_pdf", "The input file is not a valid PDF.") from error
+        validate_pdf(input_path)
 
-    def convert(self, input_path: Path, output_path: Path) -> None:
+    def convert(
+        self, input_path: Path, output_path: Path, *, overwrite: bool = False
+    ) -> tuple[Path, ...]:
         temporary_path: Path | None = None
         converter: Pdf2DocxConverter | None = None
 
         try:
-            with tempfile.NamedTemporaryFile(
-                dir=output_path.parent,
-                prefix=f".{output_path.stem}-",
-                suffix=".docx",
-                delete=False,
-            ) as temporary_file:
-                temporary_path = Path(temporary_file.name)
+            temporary_path = temporary_path_for(output_path)
 
             converter = Pdf2DocxConverter(str(input_path))
             converter.convert(str(temporary_path))
@@ -56,8 +39,11 @@ class PdfToDocxConverter(Converter):
                     "The converter did not produce a valid DOCX file.",
                 )
 
-            os.replace(temporary_path, output_path)
+            outputs = publish_outputs(
+                {temporary_path: output_path}, overwrite=overwrite
+            )
             temporary_path = None
+            return outputs
         except ConversionError:
             raise
         except Exception as error:

@@ -1,10 +1,51 @@
-enum ConversionFormat {
-  pdf('pdf'),
-  docx('docx');
+class ConversionFormat {
+  const ConversionFormat._(this.extension);
 
-  const ConversionFormat(this.extension);
+  factory ConversionFormat.fromExtension(String value) {
+    final normalized = value.trim().toLowerCase().replaceFirst('.', '');
+    if (!RegExp(r'^[a-z0-9]+$').hasMatch(normalized)) {
+      throw FormatException('Geçersiz dosya formatı: $value');
+    }
+    return ConversionFormat._(normalized);
+  }
+
+  static const pdf = ConversionFormat._('pdf');
+  static const docx = ConversionFormat._('docx');
+  static const txt = ConversionFormat._('txt');
+  static const jpg = ConversionFormat._('jpg');
+  static const jpeg = ConversionFormat._('jpeg');
+  static const png = ConversionFormat._('png');
 
   final String extension;
+
+  @override
+  bool operator ==(Object other) =>
+      other is ConversionFormat && other.extension == extension;
+
+  @override
+  int get hashCode => extension.hashCode;
+
+  @override
+  String toString() => extension;
+}
+
+class SupportedConversion {
+  const SupportedConversion({required this.source, required this.target});
+
+  factory SupportedConversion.fromJson(Map<String, dynamic> json) {
+    final source = json['source_format'];
+    final target = json['target_format'];
+    if (source is! String || target is! String) {
+      throw const FormatException('Geçersiz dönüşüm yeteneği.');
+    }
+    return SupportedConversion(
+      source: ConversionFormat.fromExtension(source),
+      target: ConversionFormat.fromExtension(target),
+    );
+  }
+
+  final ConversionFormat source;
+  final ConversionFormat target;
 }
 
 class ConversionRequest {
@@ -30,17 +71,26 @@ class ConversionResult {
     required this.durationMs,
     this.inputPath,
     this.outputPath,
+    this.outputPaths = const [],
     this.errorCode,
   });
 
   factory ConversionResult.fromJson(Map<String, dynamic> json) {
     final error = json['error'];
+    final legacyOutput = json['output_path'] as String?;
+    final rawOutputs = json['output_paths'];
+    final outputs = rawOutputs is List
+        ? rawOutputs.whereType<String>().toList(growable: false)
+        : <String>[];
     return ConversionResult(
       success: json['success'] == true,
       message: json['message'] as String? ?? 'Dönüştürme sonucu alınamadı.',
       durationMs: (json['duration_ms'] as num?)?.toInt() ?? 0,
       inputPath: json['input_path'] as String?,
-      outputPath: json['output_path'] as String?,
+      outputPath: legacyOutput ?? (outputs.isEmpty ? null : outputs.first),
+      outputPaths: outputs.isEmpty && legacyOutput != null
+          ? [legacyOutput]
+          : outputs,
       errorCode: error is Map<String, dynamic>
           ? error['code'] as String?
           : null,
@@ -52,5 +102,6 @@ class ConversionResult {
   final int durationMs;
   final String? inputPath;
   final String? outputPath;
+  final List<String> outputPaths;
   final String? errorCode;
 }

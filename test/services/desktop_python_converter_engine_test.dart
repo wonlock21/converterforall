@@ -30,6 +30,39 @@ void main() {
         isRelease: false,
       );
       try {
+        final capabilities = await engine.getSupportedConversions();
+        expect(
+          capabilities.any(
+            (conversion) =>
+                conversion.source == ConversionFormat.pdf &&
+                conversion.target == ConversionFormat.png,
+          ),
+          isTrue,
+        );
+        expect(
+          capabilities.any(
+            (conversion) =>
+                conversion.source == ConversionFormat.jpg &&
+                conversion.target == ConversionFormat.png,
+          ),
+          isTrue,
+        );
+        expect(
+          capabilities.any(
+            (conversion) =>
+                conversion.source == ConversionFormat.png &&
+                conversion.target == ConversionFormat.jpeg,
+          ),
+          isTrue,
+        );
+        expect(
+          capabilities.any(
+            (conversion) =>
+                conversion.source == ConversionFormat.png &&
+                conversion.target == ConversionFormat.pdf,
+          ),
+          isTrue,
+        );
         final results = await Future.wait([
           engine.convert(
             ConversionRequest(
@@ -76,6 +109,9 @@ void main() {
       final output = File(
         '${tempDirectory.path}${Platform.pathSeparator}result.docx',
       );
+      final textOutput = File(
+        '${tempDirectory.path}${Platform.pathSeparator}result.txt',
+      );
       final createPdf = Process.runSync(pythonExecutable, [
         '-c',
         'import pymupdf,sys; d=pymupdf.open(); p=d.new_page(); '
@@ -105,6 +141,18 @@ void main() {
         expect(result.success, isTrue, reason: result.message);
         expect(output.existsSync(), isTrue);
         expect(output.lengthSync(), greaterThan(0));
+
+        final textResult = await engine.convert(
+          ConversionRequest(
+            inputPath: source.path,
+            outputPath: textOutput.path,
+            sourceFormat: ConversionFormat.pdf,
+            targetFormat: ConversionFormat.txt,
+          ),
+        );
+        expect(textResult.success, isTrue, reason: textResult.message);
+        expect(textResult.outputPaths, [textOutput.absolute.path]);
+        expect(textOutput.readAsStringSync(), contains('convertforall'));
       } finally {
         await engine.close();
         tempDirectory.deleteSync(recursive: true);

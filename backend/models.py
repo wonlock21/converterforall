@@ -21,10 +21,11 @@ class ConversionResult:
     success: bool
     input_path: str | None
     output_path: str | None
-    source_format: str | None
-    target_format: str | None
-    duration_ms: int
-    message: str
+    output_paths: tuple[str, ...] = ()
+    source_format: str | None = None
+    target_format: str | None = None
+    duration_ms: int = 0
+    message: str = ""
     error_code: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
@@ -36,10 +37,10 @@ class ConversionResult:
             "success": self.success,
             "input_path": self.input_path,
             "output_path": self.output_path,
+            "output_paths": list(self.output_paths),
             "source_format": self.source_format,
             "target_format": self.target_format,
             "duration_ms": self.duration_ms,
             "message": self.message,
             "error": error,
         }
-

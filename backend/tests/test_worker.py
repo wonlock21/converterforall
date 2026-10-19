@@ -7,12 +7,16 @@ from backend.worker import ConversionWorker, serve
 
 
 class FakeEngine:
+    def supported_conversions(self):
+        return (("pdf", "docx"), ("pdf", "txt"))
+
     def convert(self, request):
         print("third-party progress")
         return ConversionResult(
             success=True,
             input_path=str(request.input_path),
             output_path=str(request.output_path),
+            output_paths=(str(request.output_path),),
             source_format=request.source_format,
             target_format=request.target_format,
             duration_ms=5,
@@ -39,6 +43,25 @@ def test_worker_converts_protocol_message(tmp_path: Path) -> None:
     assert response["type"] == "conversion_result"
     assert response["success"] is True
     assert response["error"] is None
+    assert response["output_paths"] == [str(tmp_path / "output.docx")]
+
+
+def test_worker_reports_engine_capabilities() -> None:
+    response = ConversionWorker(FakeEngine()).handle_message(
+        {"id": "capabilities-1", "action": "capabilities"}
+    )
+
+    assert response == {
+        "id": "capabilities-1",
+        "type": "capabilities_result",
+        "success": True,
+        "conversions": [
+            {"source_format": "pdf", "target_format": "docx"},
+            {"source_format": "pdf", "target_format": "txt"},
+        ],
+        "message": "Supported conversions retrieved successfully.",
+        "error": None,
+    }
 
 
 def test_worker_rejects_invalid_json() -> None:

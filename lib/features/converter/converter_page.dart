@@ -57,41 +57,86 @@ class ConverterPage extends StatefulWidget {
 class _ConverterPageState extends State<ConverterPage> {
   SelectedInputFile? _inputFile;
   String? _outputDirectory;
-  ConversionFormat _targetFormat = ConversionFormat.docx;
+  ConversionFormat? _sourceFormat = ConversionFormat.pdf;
+  ConversionFormat? _targetFormat = ConversionFormat.docx;
   bool _usesSourceDirectory = true;
   bool _overwrite = false;
   bool _isConverting = false;
   ConversionResult? _lastResult;
+  List<SupportedConversion> _supportedConversions = const [];
+  bool _isLoadingCapabilities = true;
 
   bool get _canDropFiles =>
       widget.dragAndDropEnabled ??
       (Platform.isWindows || Platform.isMacOS || Platform.isLinux);
 
   List<ConversionFormat> get _supportedSourceFormats {
-    return [
-      for (final source in ConversionFormat.values)
-        if (ConversionFormat.values.any(
-          (target) => widget.engine.supports(source, target),
-        ))
-          source,
-    ];
+    return _supportedConversions
+        .map((conversion) => conversion.source)
+        .toSet()
+        .toList(growable: false);
   }
 
   List<ConversionFormat> get _availableTargets {
-    final input = _inputFile;
-    if (input == null) return const [];
-    return [
-      for (final target in ConversionFormat.values)
-        if (widget.engine.supports(input.sourceFormat, target)) target,
-    ];
+    final source = _sourceFormat;
+    if (source == null) return const [];
+    return _supportedConversions
+        .where((conversion) => conversion.source == source)
+        .map((conversion) => conversion.target)
+        .toList(growable: false);
   }
 
   String? get _outputPath {
     final input = _inputFile;
     final directory = _outputDirectory;
-    if (input == null || directory == null) return null;
+    final target = _targetFormat;
+    if (input == null || directory == null || target == null) return null;
     return '$directory${Platform.pathSeparator}'
-        '${input.baseName}.${_targetFormat.extension}';
+        '${input.baseName}.${target.extension}';
+  }
+
+  @override
+  void initState() {
+    super.initState();
+    unawaited(_loadCapabilities());
+  }
+
+  Future<void> _loadCapabilities() async {
+    try {
+      final conversions = await widget.engine.getSupportedConversions();
+      if (!mounted) return;
+      setState(() {
+        _supportedConversions = conversions;
+        _isLoadingCapabilities = false;
+        final sources = _supportedSourceFormats;
+        _sourceFormat = sources.contains(_sourceFormat)
+            ? _sourceFormat
+            : (sources.isEmpty ? null : sources.first);
+        final targets = _availableTargets;
+        _targetFormat = targets.contains(_targetFormat)
+            ? _targetFormat
+            : (targets.isEmpty ? null : targets.first);
+        if (conversions.isEmpty) {
+          _lastResult = const ConversionResult(
+            success: false,
+            message: 'Bu platformda kullanılabilir bir dönüşüm bulunamadı.',
+            durationMs: 0,
+            errorCode: 'no_supported_conversions',
+          );
+        }
+      });
+    } on Object catch (error) {
+      if (!mounted) return;
+      setState(() {
+        _isLoadingCapabilities = false;
+        _lastResult = ConversionResult(
+          success: false,
+          message: 'Dönüştürme motoru başlatılamadı: $error',
+          durationMs: 0,
+          errorCode: 'engine_unavailable',
+        );
+      });
+    }
   }
 
   @override
@@ -118,13 +163,12 @@ class _ConverterPageState extends State<ConverterPage> {
 
     if (selected == null ||
         !_supportedSourceFormats.contains(selected.sourceFormat)) {
-      _showMessage('Bu dosya türü henüz desteklenmiyor. Yalnızca PDF seçin.');
+      _showMessage('Bu dosya türü henüz desteklenmiyor.');
       return;
     }
-    final targets = ConversionFormat.values
-        .where(
-          (target) => widget.engine.supports(selected.sourceFormat, target),
-        )
+    final targets = _supportedConversions
+        .where((conversion) => conversion.source == selected.sourceFormat)
+        .map((conversion) => conversion.target)
         .toList();
     if (targets.isEmpty) {
       _showMessage('Bu dosya için kullanılabilir bir hedef format bulunamadı.');
@@ -133,6 +177,7 @@ class _ConverterPageState extends State<ConverterPage> {
 
     setState(() {
       _inputFile = selected;
+      _sourceFormat = selected.sourceFormat;
       _targetFormat = targets.contains(_targetFormat)
           ? _targetFormat
           : targets.first;
@@ -150,6 +195,37 @@ class _ConverterPageState extends State<ConverterPage> {
       _outputDirectory = null;
       _usesSourceDirectory = true;
       _overwrite = false;
+      _lastResult = null;
+    });
+  }
+
+  void _changeSourceFormat(ConversionFormat format) {
+    if (_isConverting || format == _sourceFormat) return;
+    final targets = _supportedConversions
+        .where((conversion) => conversion.source == format)
+        .map((conversion) => conversion.target)
+        .toList(growable: false);
+    final inputIsIncompatible =
+        _inputFile != null && _inputFile!.sourceFormat != format;
+    setState(() {
+      _sourceFormat = format;
+      _targetFormat = targets.contains(_targetFormat)
+          ? _targetFormat
+          : (targets.isEmpty ? null : targets.first);
+      if (inputIsIncompatible) {
+        _inputFile = null;
+        _outputDirectory = null;
+        _usesSourceDirectory = true;
+        _overwrite = false;
+      }
+      _lastResult = null;
+    });
+  }
+
+  void _changeTargetFormat(ConversionFormat format) {
+    if (_isConverting || !_availableTargets.contains(format)) return;
+    setState(() {
+      _targetFormat = format;
       _lastResult = null;
     });
   }
@@ -191,7 +267,13 @@ class _ConverterPageState extends State<ConverterPage> {
   Future<void> _convert() async {
     final outputPath = _outputPath;
     final input = _inputFile;
-    if (input == null || outputPath == null || _isConverting) return;
+    final target = _targetFormat;
+    if (input == null ||
+        outputPath == null ||
+        target == null ||
+        _isConverting) {
+      return;
+    }
 
     final outputExists = File(outputPath).existsSync();
     if (outputExists && !await _confirmOverwrite()) return;
@@ -209,7 +291,7 @@ class _ConverterPageState extends State<ConverterPage> {
           inputPath: input.path,
           outputPath: outputPath,
           sourceFormat: input.sourceFormat,
-          targetFormat: _targetFormat,
+          targetFormat: target,
           overwrite: _overwrite,
         ),
       );
@@ -253,7 +335,10 @@ class _ConverterPageState extends State<ConverterPage> {
   }
 
   Future<void> _runFileAction(Future<void> Function(String path) action) async {
-    final path = _lastResult?.outputPath ?? _outputPath;
+    final outputs = _lastResult?.outputPaths ?? const <String>[];
+    final path = outputs.isNotEmpty
+        ? outputs.first
+        : (_lastResult?.outputPath ?? _outputPath);
     if (path == null) return;
     try {
       await action(path);
@@ -277,7 +362,9 @@ class _ConverterPageState extends State<ConverterPage> {
     final targets = _availableTargets;
     final canConvert =
         input != null &&
+        input.sourceFormat == _sourceFormat &&
         outputDirectory != null &&
+        _targetFormat != null &&
         targets.contains(_targetFormat) &&
         !_isConverting;
 
@@ -309,6 +396,8 @@ class _ConverterPageState extends State<ConverterPage> {
                       child: ConverterCard(
                         compact: compact,
                         inputFile: input,
+                        availableSources: _supportedSourceFormats,
+                        sourceFormat: _sourceFormat,
                         availableTargets: targets,
                         targetFormat: _targetFormat,
                         outputDirectory: outputDirectory,
@@ -318,19 +407,19 @@ class _ConverterPageState extends State<ConverterPage> {
                         usesSourceDirectory: _usesSourceDirectory,
                         overwrite: _overwrite,
                         isConverting: _isConverting,
+                        isLoadingFormats: _isLoadingCapabilities,
                         canConvert: canConvert,
                         canSelectFiles:
                             !_isConverting &&
+                            !_isLoadingCapabilities &&
                             _supportedSourceFormats.isNotEmpty,
                         dragAndDropEnabled: _canDropFiles,
                         result: _lastResult,
                         onChooseFile: _chooseInput,
                         onFileDropped: _selectInput,
                         onRemoveFile: _removeInput,
-                        onTargetChanged: (format) => setState(() {
-                          _targetFormat = format;
-                          _lastResult = null;
-                        }),
+                        onSourceChanged: _changeSourceFormat,
+                        onTargetChanged: _changeTargetFormat,
                         onChooseOutputDirectory: _chooseOutputDirectory,
                         onOverwriteChanged: (value) => setState(() {
                           _overwrite = value;

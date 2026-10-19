@@ -41,7 +41,20 @@ class ConversionWorker:
             return self._error_response(
                 None, "missing_request_id", "A non-empty request id is required."
             )
-        if message.get("action") != "convert":
+        action = message.get("action")
+        if action == "capabilities":
+            return {
+                "id": request_id,
+                "type": "capabilities_result",
+                "success": True,
+                "conversions": [
+                    {"source_format": source, "target_format": target}
+                    for source, target in self._engine.supported_conversions()
+                ],
+                "message": "Supported conversions retrieved successfully.",
+                "error": None,
+            }
+        if action != "convert":
             return self._error_response(
                 request_id,
                 "unsupported_action",

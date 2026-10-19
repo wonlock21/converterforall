@@ -14,7 +14,15 @@ class Converter(ABC):
     def validate_input(self, input_path: Path) -> None:
         """Validate format-specific input without modifying it."""
 
-    @abstractmethod
-    def convert(self, input_path: Path, output_path: Path) -> None:
-        """Convert input_path and produce output_path or raise ConversionError."""
+    def planned_output_paths(
+        self, input_path: Path, output_path: Path
+    ) -> tuple[Path, ...]:
+        """Return every final output path before conversion begins."""
 
+        return (output_path,)
+
+    @abstractmethod
+    def convert(
+        self, input_path: Path, output_path: Path, *, overwrite: bool = False
+    ) -> tuple[Path, ...]:
+        """Convert input_path and return all produced paths."""

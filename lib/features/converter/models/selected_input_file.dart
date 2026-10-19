@@ -37,12 +37,10 @@ class SelectedInputFile {
     final extension = dotIndex > 0
         ? name.substring(dotIndex + 1).toLowerCase()
         : '';
-    final sourceFormat = ConversionFormat.values
-        .where((format) => format.extension == extension)
-        .firstOrNull;
-    if (sourceFormat == null) {
+    if (extension.isEmpty) {
       return null;
     }
+    final sourceFormat = ConversionFormat.fromExtension(extension);
 
     return SelectedInputFile(
       path: file.absolute.path,

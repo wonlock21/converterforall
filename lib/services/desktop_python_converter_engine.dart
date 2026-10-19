@@ -48,6 +48,8 @@ class DesktopPythonConverterEngine implements ConverterEngine {
   final ProcessStarter _processStarter;
   final bool _isRelease;
   final Map<String, Completer<ConversionResult>> _pendingRequests = {};
+  final Map<String, Completer<List<SupportedConversion>>>
+  _pendingCapabilityRequests = {};
   final List<String> _recentErrorLines = [];
 
   Process? _process;
@@ -57,15 +59,49 @@ class DesktopPythonConverterEngine implements ConverterEngine {
   Future<void> _writeQueue = Future<void>.value();
   int _requestSequence = 0;
   bool _closed = false;
+  Future<List<SupportedConversion>>? _capabilities;
 
   @override
-  bool supports(ConversionFormat source, ConversionFormat target) {
-    return source == ConversionFormat.pdf && target == ConversionFormat.docx;
+  Future<List<SupportedConversion>> getSupportedConversions() {
+    final cached = _capabilities;
+    if (cached != null) return cached;
+    final request = _requestCapabilities();
+    _capabilities = request;
+    request.catchError((Object _) {
+      if (identical(_capabilities, request)) _capabilities = null;
+      return <SupportedConversion>[];
+    });
+    return request;
+  }
+
+  Future<List<SupportedConversion>> _requestCapabilities() async {
+    final process = await _ensureProcess();
+    final requestId = _nextRequestId();
+    final completer = Completer<List<SupportedConversion>>();
+    _pendingCapabilityRequests[requestId] = completer;
+    try {
+      await _enqueueMessage(process, {
+        'id': requestId,
+        'action': 'capabilities',
+      });
+    } on Object catch (error) {
+      _pendingCapabilityRequests.remove(requestId);
+      throw ConverterEngineException(
+        'Desteklenen formatlar yerel motordan alınamadı: $error',
+      );
+    }
+    return completer.future;
   }
 
   @override
   Future<ConversionResult> convert(ConversionRequest request) async {
-    if (!supports(request.sourceFormat, request.targetFormat)) {
+    final capabilities = await getSupportedConversions();
+    final isSupported = capabilities.any(
+      (conversion) =>
+          conversion.source == request.sourceFormat &&
+          conversion.target == request.targetFormat,
+    );
+    if (!isSupported) {
       return const ConversionResult(
         success: false,
         message: 'Bu dönüşüm türü desteklenmiyor.',
@@ -75,8 +111,7 @@ class DesktopPythonConverterEngine implements ConverterEngine {
     }
 
     final process = await _ensureProcess();
-    final requestId =
-        '${DateTime.now().microsecondsSinceEpoch}-${++_requestSequence}';
+    final requestId = _nextRequestId();
     final completer = Completer<ConversionResult>();
     _pendingRequests[requestId] = completer;
 
@@ -101,6 +136,9 @@ class DesktopPythonConverterEngine implements ConverterEngine {
 
     return completer.future;
   }
+
+  String _nextRequestId() =>
+      '${DateTime.now().microsecondsSinceEpoch}-${++_requestSequence}';
 
   Future<void> _enqueueMessage(Process process, Map<String, Object> message) {
     final write = _writeQueue.then((_) async {
@@ -261,15 +299,45 @@ class DesktopPythonConverterEngine implements ConverterEngine {
         throw const FormatException('String request id expected');
       }
 
-      final completer = _pendingRequests.remove(requestId);
-      if (completer == null) {
-        developer.log(
-          'Bilinmeyen worker yanıt kimliği: $requestId',
-          name: 'universal_converter.worker',
-        );
+      final type = decoded['type'];
+      final resultCompleter = _pendingRequests[requestId];
+      if (resultCompleter != null) {
+        final result = ConversionResult.fromJson(decoded);
+        _pendingRequests.remove(requestId);
+        resultCompleter.complete(result);
         return;
       }
-      completer.complete(ConversionResult.fromJson(decoded));
+      final capabilityCompleter = _pendingCapabilityRequests[requestId];
+      if (capabilityCompleter != null) {
+        if (type != 'capabilities_result' || decoded['success'] != true) {
+          _pendingCapabilityRequests.remove(requestId);
+          capabilityCompleter.completeError(
+            ConverterEngineException(
+              decoded['message'] as String? ??
+                  'Desteklenen formatlar alınamadı.',
+            ),
+          );
+          return;
+        }
+        final rawConversions = decoded['conversions'];
+        if (rawConversions is! List) {
+          throw const FormatException('Conversions list expected');
+        }
+        final conversions = [
+          for (final item in rawConversions)
+            if (item is Map<String, dynamic>)
+              SupportedConversion.fromJson(item)
+            else
+              throw const FormatException('Conversion object expected'),
+        ];
+        _pendingCapabilityRequests.remove(requestId);
+        capabilityCompleter.complete(conversions);
+        return;
+      }
+      developer.log(
+        'Bilinmeyen worker yanıt kimliği: $requestId',
+        name: 'universal_converter.worker',
+      );
     } on Object catch (error, stackTrace) {
       _handleProtocolFailure(error, stackTrace);
     }
@@ -333,6 +401,13 @@ class DesktopPythonConverterEngine implements ConverterEngine {
     final completers = _pendingRequests.values.toList();
     _pendingRequests.clear();
     for (final completer in completers) {
+      if (!completer.isCompleted) {
+        completer.completeError(error);
+      }
+    }
+    final capabilityCompleters = _pendingCapabilityRequests.values.toList();
+    _pendingCapabilityRequests.clear();
+    for (final completer in capabilityCompleters) {
       if (!completer.isCompleted) {
         completer.completeError(error);
       }

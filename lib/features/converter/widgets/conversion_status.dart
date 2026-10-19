@@ -18,6 +18,9 @@ class ConversionStatus extends StatelessWidget {
   Widget build(BuildContext context) {
     final colorScheme = Theme.of(context).colorScheme;
     final success = result.success;
+    final outputCount = result.outputPaths.isEmpty
+        ? (result.outputPath == null ? 0 : 1)
+        : result.outputPaths.length;
     final background = success
         ? colorScheme.primaryContainer.withValues(alpha: 0.55)
         : colorScheme.errorContainer;
@@ -63,7 +66,7 @@ class ConversionStatus extends StatelessWidget {
                       const SizedBox(height: 3),
                       Text(
                         success
-                            ? 'dosyan hazır · ${result.durationMs} ms'
+                            ? '${outputCount > 1 ? '$outputCount dosya hazır' : 'dosyan hazır'} · ${result.durationMs} ms'
                             : result.message,
                         style: Theme.of(
                           context,
@@ -74,6 +77,27 @@ class ConversionStatus extends StatelessWidget {
                 ),
               ],
             ),
+            if (success && result.outputPaths.length > 1) ...[
+              const SizedBox(height: 10),
+              for (final path in result.outputPaths.take(4))
+                Padding(
+                  padding: const EdgeInsets.only(bottom: 2),
+                  child: Text(
+                    _fileName(path),
+                    overflow: TextOverflow.ellipsis,
+                    style: Theme.of(
+                      context,
+                    ).textTheme.bodySmall?.copyWith(color: foreground),
+                  ),
+                ),
+              if (result.outputPaths.length > 4)
+                Text(
+                  '+ ${result.outputPaths.length - 4} dosya daha',
+                  style: Theme.of(
+                    context,
+                  ).textTheme.bodySmall?.copyWith(color: foreground),
+                ),
+            ],
             if (success && (onOpenFile != null || onRevealFile != null)) ...[
               const SizedBox(height: 12),
               Wrap(
@@ -85,7 +109,9 @@ class ConversionStatus extends StatelessWidget {
                       key: const Key('open_file_button'),
                       onPressed: onOpenFile,
                       icon: const Icon(Icons.open_in_new_rounded, size: 18),
-                      label: const Text('dosyayı aç'),
+                      label: Text(
+                        outputCount > 1 ? 'ilk dosyayı aç' : 'dosyayı aç',
+                      ),
                     ),
                   if (onRevealFile != null)
                     TextButton.icon(
@@ -101,5 +127,10 @@ class ConversionStatus extends StatelessWidget {
         ),
       ),
     );
+  }
+
+  static String _fileName(String path) {
+    final normalized = path.replaceAll('\\', '/');
+    return normalized.substring(normalized.lastIndexOf('/') + 1);
   }
 }

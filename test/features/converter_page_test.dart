@@ -36,9 +36,56 @@ class RecordingConverterEngine implements ConverterEngine {
   }
 
   @override
-  bool supports(ConversionFormat source, ConversionFormat target) {
-    return source == ConversionFormat.pdf && target == ConversionFormat.docx;
-  }
+  Future<List<SupportedConversion>> getSupportedConversions() async => const [
+    SupportedConversion(
+      source: ConversionFormat.pdf,
+      target: ConversionFormat.docx,
+    ),
+    SupportedConversion(
+      source: ConversionFormat.pdf,
+      target: ConversionFormat.txt,
+    ),
+    SupportedConversion(
+      source: ConversionFormat.pdf,
+      target: ConversionFormat.png,
+    ),
+    SupportedConversion(
+      source: ConversionFormat.pdf,
+      target: ConversionFormat.jpg,
+    ),
+    SupportedConversion(
+      source: ConversionFormat.pdf,
+      target: ConversionFormat.jpeg,
+    ),
+    SupportedConversion(
+      source: ConversionFormat.jpg,
+      target: ConversionFormat.pdf,
+    ),
+    SupportedConversion(
+      source: ConversionFormat.jpg,
+      target: ConversionFormat.png,
+    ),
+    SupportedConversion(
+      source: ConversionFormat.jpeg,
+      target: ConversionFormat.pdf,
+    ),
+    SupportedConversion(
+      source: ConversionFormat.jpeg,
+      target: ConversionFormat.png,
+    ),
+    SupportedConversion(
+      source: ConversionFormat.png,
+      target: ConversionFormat.pdf,
+    ),
+    SupportedConversion(
+      source: ConversionFormat.png,
+      target: ConversionFormat.jpg,
+    ),
+    SupportedConversion(
+      source: ConversionFormat.png,
+      target: ConversionFormat.jpeg,
+    ),
+  ];
 }
 
 class RecordingFileActions implements FileActions {
@@ -93,18 +140,18 @@ void main() {
           loadInputFile: (path) async {
             final name = path.replaceAll('\\', '/').split('/').last;
             final extension = name.split('.').last.toLowerCase();
-            if (extension != 'pdf') return null;
             return SelectedInputFile(
               path: path,
               name: name,
               extension: extension,
               sizeBytes: File(path).lengthSync(),
-              sourceFormat: ConversionFormat.pdf,
+              sourceFormat: ConversionFormat.fromExtension(extension),
             );
           },
         ),
       ),
     );
+    await tester.pump();
   }
 
   Future<void> settleFileIo(WidgetTester tester) async {
@@ -121,6 +168,8 @@ void main() {
     expect(find.text('dosyalarını dönüştür.'), findsOneWidget);
     expect(find.text('hızlı, basit ve tamamen çevrimdışı.'), findsOneWidget);
     expect(find.text('dosya seç'), findsOneWidget);
+    expect(find.byKey(const Key('source_format')), findsOneWidget);
+    expect(find.byKey(const Key('target_format')), findsOneWidget);
 
     final button = tester.widget<FilledButton>(
       find.byKey(const Key('convert_button')),
@@ -277,5 +326,139 @@ void main() {
 
     expect(tester.takeException(), isNull);
     expect(find.text('sample.pdf'), findsOneWidget);
+  });
+
+  testWidgets('shows only worker-reported targets for the selected source', (
+    tester,
+  ) async {
+    await pumpPage(tester);
+    await tester.tap(find.byKey(const Key('select_file_button')));
+    await settleFileIo(tester);
+
+    final dropdown = tester.widget<DropdownButton<ConversionFormat>>(
+      find.descendant(
+        of: find.byKey(const Key('target_format')),
+        matching: find.byType(DropdownButton<ConversionFormat>),
+      ),
+    );
+    final values = dropdown.items!
+        .map((item) => item.value!.extension)
+        .toList();
+    expect(values, ['docx', 'txt', 'png', 'jpg', 'jpeg']);
+    expect(values, isNot(contains('pdf')));
+  });
+
+  testWidgets('selects formats before a file and safely updates targets', (
+    tester,
+  ) async {
+    await pumpPage(tester);
+
+    final sourceDropdown = tester.widget<DropdownButton<ConversionFormat>>(
+      find.descendant(
+        of: find.byKey(const Key('source_format')),
+        matching: find.byType(DropdownButton<ConversionFormat>),
+      ),
+    );
+    expect(sourceDropdown.value, ConversionFormat.pdf);
+    sourceDropdown.onChanged!(ConversionFormat.png);
+    await tester.pump();
+
+    final changedSource = tester.widget<DropdownButton<ConversionFormat>>(
+      find.descendant(
+        of: find.byKey(const Key('source_format')),
+        matching: find.byType(DropdownButton<ConversionFormat>),
+      ),
+    );
+    final targetDropdown = tester.widget<DropdownButton<ConversionFormat>>(
+      find.descendant(
+        of: find.byKey(const Key('target_format')),
+        matching: find.byType(DropdownButton<ConversionFormat>),
+      ),
+    );
+    expect(changedSource.value, ConversionFormat.png);
+    expect(targetDropdown.items!.map((item) => item.value), [
+      ConversionFormat.pdf,
+      ConversionFormat.jpg,
+      ConversionFormat.jpeg,
+    ]);
+    expect(targetDropdown.value, ConversionFormat.pdf);
+    expect(
+      tester
+          .widget<FilledButton>(find.byKey(const Key('convert_button')))
+          .onPressed,
+      isNull,
+    );
+
+    await tester.tap(find.byKey(const Key('select_file_button')));
+    await settleFileIo(tester);
+    final updatedSource = tester.widget<DropdownButton<ConversionFormat>>(
+      find.descendant(
+        of: find.byKey(const Key('source_format')),
+        matching: find.byType(DropdownButton<ConversionFormat>),
+      ),
+    );
+    final updatedTarget = tester.widget<DropdownButton<ConversionFormat>>(
+      find.descendant(
+        of: find.byKey(const Key('target_format')),
+        matching: find.byType(DropdownButton<ConversionFormat>),
+      ),
+    );
+    expect(updatedSource.value, ConversionFormat.pdf);
+    expect(updatedTarget.value, ConversionFormat.docx);
+  });
+
+  testWidgets('auto-detects JPEG and shows an image icon', (tester) async {
+    sourceFile = File(
+      '${tempDirectory.path}${Platform.pathSeparator}photo.jpeg',
+    )..writeAsBytesSync(List<int>.filled(128, 1));
+    await pumpPage(tester);
+
+    await tester.tap(find.byKey(const Key('select_file_button')));
+    await settleFileIo(tester);
+
+    final sourceDropdown = tester.widget<DropdownButton<ConversionFormat>>(
+      find.descendant(
+        of: find.byKey(const Key('source_format')),
+        matching: find.byType(DropdownButton<ConversionFormat>),
+      ),
+    );
+    expect(sourceDropdown.value, ConversionFormat.jpeg);
+    expect(find.byIcon(Icons.image_outlined), findsOneWidget);
+    expect(find.byIcon(Icons.picture_as_pdf_outlined), findsNothing);
+  });
+
+  testWidgets('shows multiple generated outputs and opens the first one', (
+    tester,
+  ) async {
+    await pumpPage(tester);
+    await tester.tap(find.byKey(const Key('select_file_button')));
+    await settleFileIo(tester);
+    engine.pendingConversion = Completer<ConversionResult>();
+
+    await tester.ensureVisible(find.byKey(const Key('convert_button')));
+    await tester.tap(find.byKey(const Key('convert_button')));
+    await tester.pump();
+    engine.pendingConversion!.complete(
+      ConversionResult(
+        success: true,
+        message: 'ok',
+        durationMs: 25,
+        outputPath:
+            '${tempDirectory.path}${Platform.pathSeparator}page_001.png',
+        outputPaths: [
+          '${tempDirectory.path}${Platform.pathSeparator}page_001.png',
+          '${tempDirectory.path}${Platform.pathSeparator}page_002.png',
+        ],
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('2 dosya hazır · 25 ms'), findsOneWidget);
+    expect(find.text('page_001.png'), findsOneWidget);
+    expect(find.text('page_002.png'), findsOneWidget);
+    await tester.ensureVisible(find.byKey(const Key('open_file_button')));
+    await tester.tap(find.byKey(const Key('open_file_button')));
+    await tester.pump();
+    expect(fileActions.openedPath, endsWith('page_001.png'));
   });
 }

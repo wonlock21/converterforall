@@ -1,7 +1,7 @@
 import 'conversion_models.dart';
 
 abstract interface class ConverterEngine {
-  bool supports(ConversionFormat source, ConversionFormat target);
+  Future<List<SupportedConversion>> getSupportedConversions();
 
   Future<ConversionResult> convert(ConversionRequest request);
 

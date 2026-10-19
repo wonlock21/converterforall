@@ -9,12 +9,14 @@ void main() {
       'duration_ms': 42,
       'input_path': r'C:\files\input.pdf',
       'output_path': r'C:\files\output.docx',
+      'output_paths': [r'C:\files\output.docx'],
       'error': null,
     });
 
     expect(result.success, isTrue);
     expect(result.durationMs, 42);
     expect(result.outputPath, endsWith('output.docx'));
+    expect(result.outputPaths, hasLength(1));
     expect(result.errorCode, isNull);
   });
 
@@ -31,5 +33,15 @@ void main() {
 
     expect(result.success, isFalse);
     expect(result.errorCode, 'input_not_found');
+  });
+
+  test('parses worker-reported conversion capabilities', () {
+    final conversion = SupportedConversion.fromJson({
+      'source_format': 'PDF',
+      'target_format': '.png',
+    });
+
+    expect(conversion.source, ConversionFormat.pdf);
+    expect(conversion.target, ConversionFormat.png);
   });
 }

@@ -44,17 +44,27 @@ def parse_mode() -> str:
 
 def smoke_test(worker_path: Path) -> None:
     import pymupdf
+    from PIL import Image
 
     with tempfile.TemporaryDirectory(prefix="uc-worker-smoke-") as temp_directory:
         temp_path = Path(temp_directory)
         source = temp_path / "source.pdf"
         output = temp_path / "result.docx"
+        image_source = temp_path / "source.png"
+        image_output = temp_path / "image.pdf"
+        raster_output = temp_path / "image.jpeg"
         with pymupdf.open() as document:
             page = document.new_page()
             page.insert_text((72, 72), "Universal Converter worker smoke test")
             document.save(source)
+        with Image.new("RGBA", (24, 12), (87, 88, 166, 128)) as image:
+            image.save(image_source)
 
-        request = {
+        capabilities_request = {
+            "id": "pyinstaller-capabilities-test",
+            "action": "capabilities",
+        }
+        docx_request = {
             "id": "pyinstaller-smoke-test",
             "action": "convert",
             "source_format": "pdf",
@@ -63,9 +73,36 @@ def smoke_test(worker_path: Path) -> None:
             "output_path": str(output),
             "overwrite": False,
         }
+        image_request = {
+            "id": "pyinstaller-image-test",
+            "action": "convert",
+            "source_format": "png",
+            "target_format": "pdf",
+            "input_path": str(image_source),
+            "output_path": str(image_output),
+            "overwrite": False,
+        }
+        raster_request = {
+            "id": "pyinstaller-raster-test",
+            "action": "convert",
+            "source_format": "png",
+            "target_format": "jpeg",
+            "input_path": str(image_source),
+            "output_path": str(raster_output),
+            "overwrite": False,
+        }
         completed = subprocess.run(
             [str(worker_path)],
-            input=json.dumps(request) + "\n",
+            input="\n".join(
+                json.dumps(request)
+                for request in (
+                    capabilities_request,
+                    docx_request,
+                    image_request,
+                    raster_request,
+                )
+            )
+            + "\n",
             capture_output=True,
             text=True,
             encoding="utf-8",
@@ -73,21 +110,46 @@ def smoke_test(worker_path: Path) -> None:
             check=False,
         )
         protocol_lines = completed.stdout.splitlines()
-        if completed.returncode != 0 or len(protocol_lines) != 1:
+        if completed.returncode != 0 or len(protocol_lines) != 4:
             raise SystemExit(
                 "Frozen worker smoke test failed.\n"
                 f"exit={completed.returncode}\n"
                 f"stdout={completed.stdout}\n"
                 f"stderr={completed.stderr}"
             )
-        response = json.loads(protocol_lines[0])
-        if response.get("id") != request["id"] or response.get("success") is not True:
-            raise SystemExit(f"Unexpected frozen worker response: {response}")
+        capabilities, docx_response, image_response, raster_response = map(
+            json.loads, protocol_lines
+        )
+        conversions = {
+            (item.get("source_format"), item.get("target_format"))
+            for item in capabilities.get("conversions", [])
+        }
+        expected = {
+            ("pdf", "docx"),
+            ("pdf", "txt"),
+            ("png", "pdf"),
+            ("jpg", "png"),
+            ("png", "jpeg"),
+        }
+        if capabilities.get("id") != capabilities_request["id"] or not expected.issubset(conversions):
+            raise SystemExit(f"Unexpected capabilities response: {capabilities}")
+        if docx_response.get("id") != docx_request["id"] or docx_response.get("success") is not True:
+            raise SystemExit(f"Unexpected frozen worker response: {docx_response}")
+        if image_response.get("id") != image_request["id"] or image_response.get("success") is not True:
+            raise SystemExit(f"Unexpected image response: {image_response}")
+        if raster_response.get("id") != raster_request["id"] or raster_response.get("success") is not True:
+            raise SystemExit(f"Unexpected raster response: {raster_response}")
         if not output.is_file():
             raise SystemExit("Frozen worker did not create the requested DOCX file.")
         with ZipFile(output) as archive:
             if "word/document.xml" not in archive.namelist():
                 raise SystemExit("Frozen worker output is not a valid DOCX archive.")
+        with pymupdf.open(image_output) as document:
+            if document.page_count != 1:
+                raise SystemExit("Frozen worker image output is not a valid PDF.")
+        with Image.open(raster_output) as image:
+            if image.format != "JPEG" or image.size != (24, 12):
+                raise SystemExit("Frozen worker raster output is not a valid JPEG.")
 
 
 def main() -> int:
