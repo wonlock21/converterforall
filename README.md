@@ -31,6 +31,23 @@ PyInstaller worker executable
   işleyebilir.
 - UI, somut Python uygulamasına değil ortak `ConverterEngine` sözleşmesine bağlıdır.
 
+## Flutter arayüzü
+
+Arayüz Material 3 tabanlı, responsive ve tek ekranlıdır. Açık/koyu tema renkleri
+`lib/theme/app_theme.dart` içinde merkezi olarak tanımlanır. Windows, macOS ve Linux'ta
+dosya seçiciye ek olarak sürükle-bırak kullanılabilir; mobil boyutlarda dosya seçici
+akışı korunur.
+
+Seçilen dosyanın türü ve boyutu gösterilir, kaynak format uzantıdan belirlenir ve hedef
+listesi `ConverterEngine.supports()` sonucuna göre oluşturulur. Varsayılan çıktı konumu
+kaynak dosyanın klasörüdür. Var olan bir dosyanın üzerine yazmadan önce ayrıca onay
+istenir. Başarılı sonuçlarda masaüstü işletim sisteminin yerel dosya açma ve klasörde
+gösterme komutları kullanılır.
+
+Flutter tarafına eklenen tek yeni runtime bağımlılığı `desktop_drop` paketidir. Paket
+yalnızca işletim sisteminden bırakılan dosya yolunu alır; dosya içeriğini bir sunucuya
+göndermez. Dönüşüm yine yerel Python worker tarafından yapılır.
+
 ## Debug ve release davranışı
 
 Debug modunda motor şu sırayla aranır:

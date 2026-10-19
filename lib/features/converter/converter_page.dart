@@ -6,23 +6,93 @@ import 'package:flutter/material.dart';
 
 import '../../services/conversion_models.dart';
 import '../../services/converter_engine.dart';
+import '../../services/file_actions.dart';
+import 'models/selected_input_file.dart';
+import 'widgets/converter_card.dart';
+import 'widgets/converter_page_header.dart';
+
+typedef InputFilePicker = Future<String?> Function(List<String> extensions);
+typedef OutputDirectoryPicker = Future<String?> Function();
+typedef InputFileLoader = Future<SelectedInputFile?> Function(String path);
+
+Future<String?> _pickInputFile(List<String> extensions) async {
+  final file = await FilePicker.pickFile(
+    dialogTitle: 'Dönüştürülecek dosyayı seçin',
+    type: FileType.custom,
+    allowedExtensions: extensions,
+  );
+  return file?.path;
+}
+
+Future<String?> _pickOutputDirectory() {
+  return FilePicker.getDirectoryPath(dialogTitle: 'Çıktı klasörünü seçin');
+}
 
 class ConverterPage extends StatefulWidget {
-  const ConverterPage({required this.engine, super.key});
+  const ConverterPage({
+    required this.engine,
+    this.onThemeToggle,
+    this.isDarkMode = false,
+    this.pickInputFile = _pickInputFile,
+    this.pickOutputDirectory = _pickOutputDirectory,
+    this.loadInputFile = SelectedInputFile.fromPath,
+    this.fileActions = const DesktopFileActions(),
+    this.dragAndDropEnabled,
+    super.key,
+  });
 
   final ConverterEngine engine;
+  final VoidCallback? onThemeToggle;
+  final bool isDarkMode;
+  final InputFilePicker pickInputFile;
+  final OutputDirectoryPicker pickOutputDirectory;
+  final InputFileLoader loadInputFile;
+  final FileActions fileActions;
+  final bool? dragAndDropEnabled;
 
   @override
   State<ConverterPage> createState() => _ConverterPageState();
 }
 
 class _ConverterPageState extends State<ConverterPage> {
-  String? _inputPath;
+  SelectedInputFile? _inputFile;
   String? _outputDirectory;
   ConversionFormat _targetFormat = ConversionFormat.docx;
+  bool _usesSourceDirectory = true;
   bool _overwrite = false;
   bool _isConverting = false;
   ConversionResult? _lastResult;
+
+  bool get _canDropFiles =>
+      widget.dragAndDropEnabled ??
+      (Platform.isWindows || Platform.isMacOS || Platform.isLinux);
+
+  List<ConversionFormat> get _supportedSourceFormats {
+    return [
+      for (final source in ConversionFormat.values)
+        if (ConversionFormat.values.any(
+          (target) => widget.engine.supports(source, target),
+        ))
+          source,
+    ];
+  }
+
+  List<ConversionFormat> get _availableTargets {
+    final input = _inputFile;
+    if (input == null) return const [];
+    return [
+      for (final target in ConversionFormat.values)
+        if (widget.engine.supports(input.sourceFormat, target)) target,
+    ];
+  }
+
+  String? get _outputPath {
+    final input = _inputFile;
+    final directory = _outputDirectory;
+    if (input == null || directory == null) return null;
+    return '$directory${Platform.pathSeparator}'
+        '${input.baseName}.${_targetFormat.extension}';
+  }
 
   @override
   void dispose() {
@@ -30,95 +100,139 @@ class _ConverterPageState extends State<ConverterPage> {
     super.dispose();
   }
 
-  String? get _outputPath {
-    final inputPath = _inputPath;
-    final outputDirectory = _outputDirectory;
-    if (inputPath == null || outputDirectory == null) {
-      return null;
-    }
-    final normalized = inputPath.replaceAll('\\', '/');
-    final fileName = normalized.substring(normalized.lastIndexOf('/') + 1);
-    final dotIndex = fileName.lastIndexOf('.');
-    final baseName = dotIndex > 0 ? fileName.substring(0, dotIndex) : fileName;
-    return '$outputDirectory${Platform.pathSeparator}'
-        '$baseName.${_targetFormat.extension}';
-  }
-
   Future<void> _chooseInput() async {
-    final file = await FilePicker.pickFile(
-      dialogTitle: 'Dönüştürülecek PDF dosyasını seçin',
-      type: FileType.custom,
-      allowedExtensions: const ['pdf'],
-    );
-    if (file?.path == null || !mounted) {
+    if (_supportedSourceFormats.isEmpty) {
+      _showMessage('Bu platformda kullanılabilir bir dönüştürme motoru yok.');
       return;
     }
+    final path = await widget.pickInputFile(
+      _supportedSourceFormats.map((format) => format.extension).toList(),
+    );
+    if (path != null && mounted) await _selectInput(path);
+  }
+
+  Future<void> _selectInput(String path) async {
+    if (_isConverting) return;
+    final selected = await widget.loadInputFile(path);
+    if (!mounted) return;
+
+    if (selected == null ||
+        !_supportedSourceFormats.contains(selected.sourceFormat)) {
+      _showMessage('Bu dosya türü henüz desteklenmiyor. Yalnızca PDF seçin.');
+      return;
+    }
+    final targets = ConversionFormat.values
+        .where(
+          (target) => widget.engine.supports(selected.sourceFormat, target),
+        )
+        .toList();
+    if (targets.isEmpty) {
+      _showMessage('Bu dosya için kullanılabilir bir hedef format bulunamadı.');
+      return;
+    }
+
     setState(() {
-      _inputPath = file!.path;
+      _inputFile = selected;
+      _targetFormat = targets.contains(_targetFormat)
+          ? _targetFormat
+          : targets.first;
+      _outputDirectory = selected.directoryPath;
+      _usesSourceDirectory = true;
+      _overwrite = false;
+      _lastResult = null;
+    });
+  }
+
+  void _removeInput() {
+    if (_isConverting) return;
+    setState(() {
+      _inputFile = null;
+      _outputDirectory = null;
+      _usesSourceDirectory = true;
+      _overwrite = false;
       _lastResult = null;
     });
   }
 
   Future<void> _chooseOutputDirectory() async {
-    final directory = await FilePicker.getDirectoryPath(
-      dialogTitle: 'DOCX dosyasının kaydedileceği klasörü seçin',
-    );
-    if (directory == null || !mounted) {
-      return;
-    }
+    final directory = await widget.pickOutputDirectory();
+    if (directory == null || !mounted) return;
     setState(() {
       _outputDirectory = directory;
+      _usesSourceDirectory = directory == _inputFile?.directoryPath;
       _lastResult = null;
     });
   }
 
+  Future<bool> _confirmOverwrite() async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Dosyanın üzerine yazılsın mı?'),
+        content: const Text(
+          'Aynı adda bir dosya zaten var. Bu işlem mevcut dosyanın yerini alacak.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('vazgeç'),
+          ),
+          FilledButton(
+            key: const Key('confirm_overwrite_button'),
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('üzerine yaz'),
+          ),
+        ],
+      ),
+    );
+    return confirmed ?? false;
+  }
+
   Future<void> _convert() async {
     final outputPath = _outputPath;
-    final inputPath = _inputPath;
-    if (inputPath == null || outputPath == null || _isConverting) {
-      return;
-    }
+    final input = _inputFile;
+    if (input == null || outputPath == null || _isConverting) return;
+
+    final outputExists = File(outputPath).existsSync();
+    if (outputExists && !await _confirmOverwrite()) return;
+    if (!mounted) return;
 
     setState(() {
       _isConverting = true;
+      _overwrite = _overwrite || outputExists;
       _lastResult = null;
     });
 
     try {
       final result = await widget.engine.convert(
         ConversionRequest(
-          inputPath: inputPath,
+          inputPath: input.path,
           outputPath: outputPath,
-          sourceFormat: ConversionFormat.pdf,
+          sourceFormat: input.sourceFormat,
           targetFormat: _targetFormat,
           overwrite: _overwrite,
         ),
       );
       if (!mounted) return;
       setState(() => _lastResult = result);
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(
-            result.success
-                ? 'Dönüştürme tamamlandı.'
-                : 'Dönüştürme başarısız: ${result.message}',
-          ),
-        ),
+      _showMessage(
+        result.success
+            ? 'Dönüştürme tamamlandı.'
+            : 'Dönüştürme başarısız: ${result.message}',
       );
     } on ConverterEngineException catch (error) {
       if (!mounted) return;
-      final result = ConversionResult(
-        success: false,
-        message: error.message,
-        durationMs: 0,
-        inputPath: inputPath,
-        outputPath: outputPath,
-        errorCode: 'engine_unavailable',
+      setState(
+        () => _lastResult = ConversionResult(
+          success: false,
+          message: error.message,
+          durationMs: 0,
+          inputPath: input.path,
+          outputPath: outputPath,
+          errorCode: 'engine_unavailable',
+        ),
       );
-      setState(() => _lastResult = result);
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text(error.message)));
+      _showMessage(error.message);
     } catch (error) {
       if (!mounted) return;
       const message = 'Beklenmeyen bir hata oluştu.';
@@ -127,206 +241,139 @@ class _ConverterPageState extends State<ConverterPage> {
           success: false,
           message: '$message ($error)',
           durationMs: 0,
-          inputPath: inputPath,
+          inputPath: input.path,
           outputPath: outputPath,
           errorCode: 'unexpected_error',
         ),
       );
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(const SnackBar(content: Text(message)));
+      _showMessage(message);
     } finally {
-      if (mounted) {
-        setState(() => _isConverting = false);
-      }
+      if (mounted) setState(() => _isConverting = false);
     }
+  }
+
+  Future<void> _runFileAction(Future<void> Function(String path) action) async {
+    final path = _lastResult?.outputPath ?? _outputPath;
+    if (path == null) return;
+    try {
+      await action(path);
+    } on FileActionException catch (error) {
+      if (mounted) _showMessage(error.message);
+    } on Object {
+      if (mounted) _showMessage('Dosya işlemi başlatılamadı.');
+    }
+  }
+
+  void _showMessage(String message) {
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(SnackBar(content: Text(message)));
   }
 
   @override
   Widget build(BuildContext context) {
+    final input = _inputFile;
+    final outputDirectory = _outputDirectory;
+    final targets = _availableTargets;
     final canConvert =
-        _inputPath != null &&
-        _outputDirectory != null &&
-        !_isConverting &&
-        widget.engine.supports(ConversionFormat.pdf, _targetFormat);
+        input != null &&
+        outputDirectory != null &&
+        targets.contains(_targetFormat) &&
+        !_isConverting;
 
     return Scaffold(
-      appBar: AppBar(title: const Text('Universal Converter')),
-      body: Center(
-        child: SingleChildScrollView(
-          padding: const EdgeInsets.all(24),
-          child: ConstrainedBox(
-            constraints: const BoxConstraints(maxWidth: 720),
-            child: Card(
-              child: Padding(
-                padding: const EdgeInsets.all(24),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: [
-                    Text(
-                      'PDF → DOCX',
-                      style: Theme.of(context).textTheme.headlineMedium,
-                    ),
-                    const SizedBox(height: 8),
-                    Text(
-                      'Dosyalarınız cihazınızdan ayrılmadan dönüştürülür.',
-                      style: Theme.of(context).textTheme.bodyLarge,
-                    ),
-                    const SizedBox(height: 28),
-                    _PathField(
-                      label: 'Kaynak PDF',
-                      value: _inputPath,
-                      buttonLabel: 'PDF seç',
-                      icon: Icons.picture_as_pdf_outlined,
-                      onPressed: _isConverting ? null : _chooseInput,
-                    ),
-                    const SizedBox(height: 20),
-                    DropdownButtonFormField<ConversionFormat>(
-                      initialValue: _targetFormat,
-                      decoration: const InputDecoration(
-                        labelText: 'Çıktı formatı',
-                        border: OutlineInputBorder(),
-                      ),
-                      items: const [
-                        DropdownMenuItem(
-                          value: ConversionFormat.docx,
-                          child: Text('DOCX'),
-                        ),
-                      ],
-                      onChanged: _isConverting
-                          ? null
-                          : (value) {
-                              if (value != null) {
-                                setState(() => _targetFormat = value);
-                              }
-                            },
-                    ),
-                    const SizedBox(height: 20),
-                    _PathField(
-                      label: 'Çıktı klasörü',
-                      value: _outputDirectory,
-                      buttonLabel: 'Klasör seç',
-                      icon: Icons.folder_outlined,
-                      onPressed: _isConverting ? null : _chooseOutputDirectory,
-                    ),
-                    if (_outputPath != null) ...[
-                      const SizedBox(height: 12),
-                      SelectableText('Çıktı: $_outputPath'),
-                    ],
-                    CheckboxListTile(
-                      contentPadding: EdgeInsets.zero,
-                      value: _overwrite,
-                      title: const Text('Aynı adlı dosya varsa üzerine yaz'),
-                      controlAffinity: ListTileControlAffinity.leading,
-                      onChanged: _isConverting
-                          ? null
-                          : (value) =>
-                                setState(() => _overwrite = value ?? false),
-                    ),
-                    const SizedBox(height: 16),
-                    FilledButton.icon(
-                      key: const Key('convert_button'),
-                      onPressed: canConvert ? _convert : null,
-                      icon: _isConverting
-                          ? const SizedBox.square(
-                              dimension: 18,
-                              child: CircularProgressIndicator(strokeWidth: 2),
-                            )
-                          : const Icon(Icons.sync),
-                      label: Text(
-                        _isConverting
-                            ? 'Dönüştürülüyor…'
-                            : 'Dönüştürmeyi başlat',
-                      ),
-                    ),
-                    if (_lastResult case final result?) ...[
-                      const SizedBox(height: 20),
-                      _ResultPanel(result: result),
-                    ],
-                  ],
-                ),
+      body: SafeArea(
+        child: LayoutBuilder(
+          builder: (context, constraints) {
+            final compact = constraints.maxWidth < 600;
+            final horizontalPadding = compact ? 16.0 : 28.0;
+            return SingleChildScrollView(
+              padding: EdgeInsets.fromLTRB(
+                horizontalPadding,
+                compact ? 14 : 22,
+                horizontalPadding,
+                36,
               ),
-            ),
-          ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  ConverterPageHeader(
+                    compact: compact,
+                    isDarkMode: widget.isDarkMode,
+                    onThemeToggle: widget.onThemeToggle,
+                  ),
+                  SizedBox(height: compact ? 26 : 34),
+                  Center(
+                    child: ConstrainedBox(
+                      constraints: const BoxConstraints(maxWidth: 760),
+                      child: ConverterCard(
+                        compact: compact,
+                        inputFile: input,
+                        availableTargets: targets,
+                        targetFormat: _targetFormat,
+                        outputDirectory: outputDirectory,
+                        outputDirectoryName: outputDirectory == null
+                            ? null
+                            : _directoryName(outputDirectory),
+                        usesSourceDirectory: _usesSourceDirectory,
+                        overwrite: _overwrite,
+                        isConverting: _isConverting,
+                        canConvert: canConvert,
+                        canSelectFiles:
+                            !_isConverting &&
+                            _supportedSourceFormats.isNotEmpty,
+                        dragAndDropEnabled: _canDropFiles,
+                        result: _lastResult,
+                        onChooseFile: _chooseInput,
+                        onFileDropped: _selectInput,
+                        onRemoveFile: _removeInput,
+                        onTargetChanged: (format) => setState(() {
+                          _targetFormat = format;
+                          _lastResult = null;
+                        }),
+                        onChooseOutputDirectory: _chooseOutputDirectory,
+                        onOverwriteChanged: (value) => setState(() {
+                          _overwrite = value;
+                          _lastResult = null;
+                        }),
+                        onConvert: _convert,
+                        onOpenFile:
+                            _lastResult?.success == true &&
+                                widget.fileActions.isSupported
+                            ? () => _runFileAction(widget.fileActions.openFile)
+                            : null,
+                        onRevealFile:
+                            _lastResult?.success == true &&
+                                widget.fileActions.isSupported
+                            ? () =>
+                                  _runFileAction(widget.fileActions.revealFile)
+                            : null,
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 18),
+                  Center(
+                    child: Text(
+                      'dosyaların cihazından ayrılmaz',
+                      style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                        color: Theme.of(context).colorScheme.onSurfaceVariant,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            );
+          },
         ),
       ),
     );
   }
-}
 
-class _PathField extends StatelessWidget {
-  const _PathField({
-    required this.label,
-    required this.value,
-    required this.buttonLabel,
-    required this.icon,
-    required this.onPressed,
-  });
-
-  final String label;
-  final String? value;
-  final String buttonLabel;
-  final IconData icon;
-  final VoidCallback? onPressed;
-
-  @override
-  Widget build(BuildContext context) {
-    return InputDecorator(
-      decoration: InputDecoration(
-        labelText: label,
-        border: const OutlineInputBorder(),
-      ),
-      child: Row(
-        children: [
-          Icon(icon),
-          const SizedBox(width: 12),
-          Expanded(
-            child: Text(
-              value ?? 'Henüz seçilmedi',
-              maxLines: 2,
-              overflow: TextOverflow.ellipsis,
-            ),
-          ),
-          const SizedBox(width: 12),
-          OutlinedButton(onPressed: onPressed, child: Text(buttonLabel)),
-        ],
-      ),
-    );
-  }
-}
-
-class _ResultPanel extends StatelessWidget {
-  const _ResultPanel({required this.result});
-
-  final ConversionResult result;
-
-  @override
-  Widget build(BuildContext context) {
-    final color = result.success
-        ? Theme.of(context).colorScheme.primaryContainer
-        : Theme.of(context).colorScheme.errorContainer;
-    return Container(
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: color,
-        borderRadius: BorderRadius.circular(12),
-      ),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Icon(
-            result.success ? Icons.check_circle_outline : Icons.error_outline,
-          ),
-          const SizedBox(width: 12),
-          Expanded(
-            child: Text(
-              result.success
-                  ? 'Başarılı (${result.durationMs} ms)\n${result.outputPath}'
-                  : result.message,
-            ),
-          ),
-        ],
-      ),
-    );
+  static String _directoryName(String path) {
+    final normalized = path
+        .replaceAll('\\', '/')
+        .replaceFirst(RegExp(r'/$'), '');
+    final name = normalized.substring(normalized.lastIndexOf('/') + 1);
+    return name.isEmpty ? path : name;
   }
 }

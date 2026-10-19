@@ -64,6 +64,57 @@ void main() {
         : 'Desktop Python test environment is not available.',
   );
 
+  test(
+    'converts a real PDF through the desktop JSON Lines adapter',
+    () async {
+      final tempDirectory = Directory.systemTemp.createTempSync(
+        'convertforall-engine-',
+      );
+      final source = File(
+        '${tempDirectory.path}${Platform.pathSeparator}source.pdf',
+      );
+      final output = File(
+        '${tempDirectory.path}${Platform.pathSeparator}result.docx',
+      );
+      final createPdf = Process.runSync(pythonExecutable, [
+        '-c',
+        'import pymupdf,sys; d=pymupdf.open(); p=d.new_page(); '
+            'p.insert_text((72,72), "convertforall adapter test"); '
+            'd.save(sys.argv[1]); d.close()',
+        source.path,
+      ]);
+      expect(createPdf.exitCode, 0, reason: createPdf.stderr.toString());
+
+      final engine = DesktopPythonConverterEngine(
+        pythonExecutable: pythonExecutable,
+        projectRoot: projectRoot,
+        isRelease: false,
+      );
+      try {
+        final result = await engine
+            .convert(
+              ConversionRequest(
+                inputPath: source.path,
+                outputPath: output.path,
+                sourceFormat: ConversionFormat.pdf,
+                targetFormat: ConversionFormat.docx,
+              ),
+            )
+            .timeout(const Duration(seconds: 30));
+
+        expect(result.success, isTrue, reason: result.message);
+        expect(output.existsSync(), isTrue);
+        expect(output.lengthSync(), greaterThan(0));
+      } finally {
+        await engine.close();
+        tempDirectory.deleteSync(recursive: true);
+      }
+    },
+    skip: isDesktop && workerSource.existsSync()
+        ? false
+        : 'Desktop Python test environment is not available.',
+  );
+
   test('release mode never falls back to source Python', () async {
     var processWasStarted = false;
     final engine = DesktopPythonConverterEngine(
