@@ -5,6 +5,50 @@ import 'package:convertforall_flutter/services/converter_engine.dart';
 import 'package:convertforall_flutter/services/desktop_python_converter_engine.dart';
 import 'package:flutter_test/flutter_test.dart';
 
+void _expectSingleOutputPathMatches(
+  List<String> actualPaths,
+  File expectedFile,
+) {
+  expect(actualPaths, hasLength(1));
+
+  final actualFile = File(actualPaths.single);
+  final actualName = actualFile.uri.pathSegments.last;
+  final expectedName = expectedFile.uri.pathSegments.last;
+  expect(
+    Platform.isWindows ? actualName.toLowerCase() : actualName,
+    Platform.isWindows ? expectedName.toLowerCase() : expectedName,
+    reason: 'The worker returned an unexpected output file name.',
+  );
+
+  final actualParent = actualFile.parent;
+  final expectedParent = expectedFile.absolute.parent;
+  expect(
+    actualParent.existsSync(),
+    isTrue,
+    reason: 'The worker returned a path in a directory that does not exist.',
+  );
+  expect(
+    expectedParent.existsSync(),
+    isTrue,
+    reason: 'The expected output directory does not exist.',
+  );
+
+  // The planned output file does not exist yet, so resolve only its existing
+  // parent directory. This also normalizes aliases such as /var vs
+  // /private/var and Windows 8.3 short paths before comparison.
+  final actualResolvedParent = actualParent.resolveSymbolicLinksSync();
+  final expectedResolvedParent = expectedParent.resolveSymbolicLinksSync();
+  expect(
+    Platform.isWindows
+        ? actualResolvedParent.toLowerCase()
+        : actualResolvedParent,
+    Platform.isWindows
+        ? expectedResolvedParent.toLowerCase()
+        : expectedResolvedParent,
+    reason: 'The worker returned an output path in an unexpected directory.',
+  );
+}
+
 void main() {
   final projectRoot = Directory.current.path;
   final venvPython = Platform.isWindows
@@ -136,7 +180,7 @@ void main() {
           ),
         );
         expect(textPlan.success, isTrue, reason: textPlan.message);
-        expect(textPlan.outputPaths, [textOutput.absolute.path]);
+        _expectSingleOutputPathMatches(textPlan.outputPaths, textOutput);
         expect(textPlan.conflictingOutputPaths, isEmpty);
 
         final result = await engine
@@ -163,7 +207,7 @@ void main() {
           ),
         );
         expect(textResult.success, isTrue, reason: textResult.message);
-        expect(textResult.outputPaths, [textOutput.absolute.path]);
+        _expectSingleOutputPathMatches(textResult.outputPaths, textOutput);
         expect(textOutput.readAsStringSync(), contains('convertforall'));
       } finally {
         await engine.close();
