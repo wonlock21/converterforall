@@ -2,7 +2,7 @@ import io
 import json
 from pathlib import Path
 
-from backend.models import ConversionResult
+from backend.models import ConversionPlanResult, ConversionResult
 from backend.worker import ConversionWorker, serve
 
 
@@ -21,6 +21,18 @@ class FakeEngine:
             target_format=request.target_format,
             duration_ms=5,
             message="ok",
+        )
+
+    def plan(self, request):
+        return ConversionPlanResult(
+            success=True,
+            input_path=str(request.input_path),
+            output_paths=(str(request.output_path),),
+            conflicting_output_paths=(str(request.output_path),),
+            source_format=request.source_format,
+            target_format=request.target_format,
+            duration_ms=1,
+            message="planned",
         )
 
 
@@ -62,6 +74,21 @@ def test_worker_reports_engine_capabilities() -> None:
         "message": "Supported conversions retrieved successfully.",
         "error": None,
     }
+
+
+def test_worker_returns_structured_conversion_plan(tmp_path: Path) -> None:
+    message = valid_message(tmp_path)
+    message["action"] = "plan_conversion"
+
+    response = ConversionWorker(FakeEngine()).handle_message(message)
+
+    assert response["id"] == "request-1"
+    assert response["type"] == "conversion_plan"
+    assert response["success"] is True
+    assert response["output_paths"] == [str(tmp_path / "output.docx")]
+    assert response["conflicting_output_paths"] == [
+        str(tmp_path / "output.docx")
+    ]
 
 
 def test_worker_rejects_invalid_json() -> None:

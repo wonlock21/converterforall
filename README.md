@@ -55,8 +55,10 @@ akışı korunur.
 Kaynak ve hedef format alanları dosya seçilmeden önce de görünür. Kullanıcı önce
 formatları veya önce dosyayı seçebilir. Kaynak değiştiğinde hedef listesi worker'ın
 `capabilities` yanıtına göre yenilenir; dosya seçildiğinde kaynak uzantısı otomatik
-algılanır. Böylece desteklenen dönüşüm çiftleri Flutter içinde ikinci bir sabit liste
-olarak tutulmaz. Seçilen dosyanın türü, boyutu ve formata uygun simgesi gösterilir.
+algılanır. Dosya seçici seçili kaynak uzantısıyla filtrelenir; JPG ve JPEG aynı seçim
+ailesi içinde kabul edilir. Sürükle-bırak sırasında gerçek uzantı seçili kaynağı
+güvenli biçimde günceller. Böylece desteklenen dönüşüm çiftleri Flutter içinde ikinci
+bir sabit liste olarak tutulmaz. Seçilen dosyanın türü, boyutu ve formata uygun simgesi gösterilir.
 Varsayılan çıktı konumu kaynak dosyanın klasörüdür. Var olan bir dosyanın üzerine
 yazmadan önce ayrıca onay istenir. Başarılı sonuçlarda tek veya çoklu çıktı listelenir;
 ilk dosya açılabilir ve çıktı klasörü gösterilebilir.
@@ -283,6 +285,22 @@ Uygulama worker açıldıktan sonra önce desteklenen dönüşümleri sorgular:
 
 Liste registry'den üretildiği için Python converter kayıtları protokolün tek doğruluk
 kaynağıdır. Her istek benzersiz bir `id` taşır ve aynı `id` ile yanıtlanır.
+
+Dönüştürmeden önce Flutter aynı taşıma kanalı üzerinden çıktı planını ister:
+
+```json
+{"id":"plan-1","action":"plan_conversion","source_format":"pdf","target_format":"png","input_path":"/files/document.pdf","output_path":"/files/document.png","overwrite":false}
+```
+
+```json
+{"id":"plan-1","type":"conversion_plan","success":true,"output_paths":["/files/document_page_001.png","/files/document_page_002.png"],"conflicting_output_paths":["/files/document_page_002.png"],"error":null}
+```
+
+Plan doğrudan converter'ın `planned_output_paths()` sonucudur; Flutter aynı dosya adı
+algoritmasını yeniden uygulamaz. Çakışan dosyalar kullanıcıya adlarıyla gösterilir.
+Onay tek dönüşüm isteği için kullanılır ve kalıcı “üzerine yaz” seçeneğini değiştirmez.
+Nihai `convert` çağrısı çıktıları tekrar doğruladığı için planlamadan sonra oluşan bir
+çakışma, üzerine yazma izni yoksa güvenli biçimde reddedilir.
 
 Flutter her isteği stdin'e tek satırlık JSON olarak gönderir:
 

@@ -48,6 +48,7 @@ class DesktopPythonConverterEngine implements ConverterEngine {
   final ProcessStarter _processStarter;
   final bool _isRelease;
   final Map<String, Completer<ConversionResult>> _pendingRequests = {};
+  final Map<String, Completer<ConversionPlan>> _pendingPlanRequests = {};
   final Map<String, Completer<List<SupportedConversion>>>
   _pendingCapabilityRequests = {};
   final List<String> _recentErrorLines = [];
@@ -134,6 +135,46 @@ class DesktopPythonConverterEngine implements ConverterEngine {
       );
     }
 
+    return completer.future;
+  }
+
+  @override
+  Future<ConversionPlan> planConversion(ConversionRequest request) async {
+    final capabilities = await getSupportedConversions();
+    final isSupported = capabilities.any(
+      (conversion) =>
+          conversion.source == request.sourceFormat &&
+          conversion.target == request.targetFormat,
+    );
+    if (!isSupported) {
+      return const ConversionPlan(
+        success: false,
+        message: 'Bu dönüşüm türü desteklenmiyor.',
+        durationMs: 0,
+        errorCode: 'unsupported_conversion',
+      );
+    }
+
+    final process = await _ensureProcess();
+    final requestId = _nextRequestId();
+    final completer = Completer<ConversionPlan>();
+    _pendingPlanRequests[requestId] = completer;
+    try {
+      await _enqueueMessage(process, {
+        'id': requestId,
+        'action': 'plan_conversion',
+        'source_format': request.sourceFormat.extension,
+        'target_format': request.targetFormat.extension,
+        'input_path': request.inputPath,
+        'output_path': request.outputPath,
+        'overwrite': false,
+      });
+    } on Object catch (error) {
+      _pendingPlanRequests.remove(requestId);
+      throw ConverterEngineException(
+        'Dönüşüm planı yerel motordan alınamadı: $error',
+      );
+    }
     return completer.future;
   }
 
@@ -307,6 +348,16 @@ class DesktopPythonConverterEngine implements ConverterEngine {
         resultCompleter.complete(result);
         return;
       }
+      final planCompleter = _pendingPlanRequests[requestId];
+      if (planCompleter != null) {
+        if (type != 'conversion_plan') {
+          throw const FormatException('Conversion plan expected');
+        }
+        final plan = ConversionPlan.fromJson(decoded);
+        _pendingPlanRequests.remove(requestId);
+        planCompleter.complete(plan);
+        return;
+      }
       final capabilityCompleter = _pendingCapabilityRequests[requestId];
       if (capabilityCompleter != null) {
         if (type != 'capabilities_result' || decoded['success'] != true) {
@@ -401,6 +452,13 @@ class DesktopPythonConverterEngine implements ConverterEngine {
     final completers = _pendingRequests.values.toList();
     _pendingRequests.clear();
     for (final completer in completers) {
+      if (!completer.isCompleted) {
+        completer.completeError(error);
+      }
+    }
+    final planCompleters = _pendingPlanRequests.values.toList();
+    _pendingPlanRequests.clear();
+    for (final completer in planCompleters) {
       if (!completer.isCompleted) {
         completer.completeError(error);
       }

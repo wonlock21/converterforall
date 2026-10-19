@@ -9,7 +9,7 @@ from typing import Iterable
 
 from backend.converters.base import Converter
 from backend.errors import ConversionError, ValidationError
-from backend.models import ConversionRequest, ConversionResult
+from backend.models import ConversionPlanResult, ConversionRequest, ConversionResult
 
 
 class ConversionEngine:
@@ -21,6 +21,65 @@ class ConversionEngine:
 
     def supported_conversions(self) -> tuple[tuple[str, str], ...]:
         return tuple(sorted(self._converters))
+
+    def plan(self, request: ConversionRequest) -> ConversionPlanResult:
+        """Validate a request and report every output without modifying files."""
+
+        started_at = perf_counter()
+        source_format = request.source_format.lower().lstrip(".")
+        target_format = request.target_format.lower().lstrip(".")
+        try:
+            input_path, output_path = self._validate_request(
+                request, source_format, target_format
+            )
+            converter = self._converters.get((source_format, target_format))
+            if converter is None:
+                raise ValidationError(
+                    "unsupported_conversion",
+                    f"Conversion from {source_format.upper()} to "
+                    f"{target_format.upper()} is not supported.",
+                )
+            converter.validate_input(input_path)
+            output_paths = converter.planned_output_paths(input_path, output_path)
+            # Existing regular files are reported as conflicts, not rejected.
+            # Other path errors remain invalid even when overwrite is allowed.
+            self._validate_output_paths(
+                input_path,
+                output_paths,
+                target_format=target_format,
+                overwrite=True,
+            )
+            conflicts = tuple(path for path in output_paths if path.exists())
+            return ConversionPlanResult(
+                success=True,
+                input_path=str(input_path),
+                output_paths=tuple(str(path) for path in output_paths),
+                conflicting_output_paths=tuple(str(path) for path in conflicts),
+                source_format=source_format,
+                target_format=target_format,
+                duration_ms=self._duration_ms(started_at),
+                message="Conversion plan created successfully.",
+            )
+        except ConversionError as error:
+            return ConversionPlanResult(
+                success=False,
+                input_path=str(request.input_path),
+                source_format=source_format,
+                target_format=target_format,
+                duration_ms=self._duration_ms(started_at),
+                message=error.message,
+                error_code=error.code,
+            )
+        except Exception:
+            return ConversionPlanResult(
+                success=False,
+                input_path=str(request.input_path),
+                source_format=source_format,
+                target_format=target_format,
+                duration_ms=self._duration_ms(started_at),
+                message="An unexpected conversion planning error occurred.",
+                error_code="internal_error",
+            )
 
     def convert(self, request: ConversionRequest) -> ConversionResult:
         started_at = perf_counter()

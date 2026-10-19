@@ -95,6 +95,39 @@ def test_engine_can_explicitly_overwrite(tmp_path: Path) -> None:
     assert target.read_bytes() == b"docx"
 
 
+def test_plan_reports_single_output_collision_without_touching_it(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "source.pdf"
+    target = tmp_path / "result.docx"
+    source.write_bytes(b"pdf")
+    target.write_bytes(b"existing")
+
+    plan = ConversionEngine([RecordingConverter()]).plan(request(source, target))
+
+    assert plan.success is True
+    assert plan.output_paths == (str(target.resolve()),)
+    assert plan.conflicting_output_paths == (str(target.resolve()),)
+    assert target.read_bytes() == b"existing"
+
+
+def test_collision_created_after_plan_is_still_rejected(tmp_path: Path) -> None:
+    source = tmp_path / "source.pdf"
+    target = tmp_path / "result.docx"
+    source.write_bytes(b"pdf")
+    engine = ConversionEngine([RecordingConverter()])
+
+    plan = engine.plan(request(source, target))
+    target.write_bytes(b"created after planning")
+    result = engine.convert(request(source, target))
+
+    assert plan.success is True
+    assert plan.conflicting_output_paths == ()
+    assert result.success is False
+    assert result.error_code == "output_exists"
+    assert target.read_bytes() == b"created after planning"
+
+
 def test_engine_reports_unsupported_conversion(tmp_path: Path) -> None:
     source = tmp_path / "source.pdf"
     source.write_bytes(b"pdf")

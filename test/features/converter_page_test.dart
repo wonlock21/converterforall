@@ -13,7 +13,10 @@ import 'package:flutter_test/flutter_test.dart';
 
 class RecordingConverterEngine implements ConverterEngine {
   final requests = <ConversionRequest>[];
+  final planRequests = <ConversionRequest>[];
   Completer<ConversionResult>? pendingConversion;
+  ConversionPlan? nextPlan;
+  ConversionResult? nextConversionResult;
   bool closed = false;
 
   @override
@@ -25,13 +28,32 @@ class RecordingConverterEngine implements ConverterEngine {
     final pending = pendingConversion;
     if (pending != null) return pending.future;
     return Future.value(
-      ConversionResult(
-        success: true,
-        message: 'ok',
-        durationMs: 12,
-        inputPath: request.inputPath,
-        outputPath: request.outputPath,
-      ),
+      nextConversionResult ??
+          ConversionResult(
+            success: true,
+            message: 'ok',
+            durationMs: 12,
+            inputPath: request.inputPath,
+            outputPath: request.outputPath,
+          ),
+    );
+  }
+
+  @override
+  Future<ConversionPlan> planConversion(ConversionRequest request) async {
+    planRequests.add(request);
+    final configured = nextPlan;
+    if (configured != null) return configured;
+    final conflict = File(request.outputPath).existsSync()
+        ? [request.outputPath]
+        : const <String>[];
+    return ConversionPlan(
+      success: true,
+      message: 'planned',
+      durationMs: 1,
+      inputPath: request.inputPath,
+      outputPaths: [request.outputPath],
+      conflictingOutputPaths: conflict,
     );
   }
 
@@ -125,6 +147,7 @@ void main() {
     WidgetTester tester, {
     bool dragAndDropEnabled = false,
     Size size = const Size(1100, 900),
+    InputFilePicker? inputFilePicker,
   }) async {
     await tester.binding.setSurfaceSize(size);
     addTearDown(() => tester.binding.setSurfaceSize(null));
@@ -135,7 +158,7 @@ void main() {
           engine: engine,
           fileActions: fileActions,
           dragAndDropEnabled: dragAndDropEnabled,
-          pickInputFile: (_) async => sourceFile.path,
+          pickInputFile: inputFilePicker ?? (_) async => sourceFile.path,
           pickOutputDirectory: () async => tempDirectory.path,
           loadInputFile: (path) async {
             final name = path.replaceAll('\\', '/').split('/').last;
@@ -159,6 +182,13 @@ void main() {
       () => Future<void>.delayed(const Duration(milliseconds: 30)),
     );
     await tester.pumpAndSettle();
+  }
+
+  Future<void> pumpAsyncWork(WidgetTester tester) async {
+    await tester.runAsync(
+      () => Future<void>.delayed(const Duration(milliseconds: 30)),
+    );
+    await tester.pump();
   }
 
   testWidgets('shows the minimal initial workflow', (tester) async {
@@ -198,7 +228,7 @@ void main() {
 
     await tester.ensureVisible(find.byKey(const Key('convert_button')));
     await tester.tap(find.byKey(const Key('convert_button')));
-    await settleFileIo(tester);
+    await pumpAsyncWork(tester);
 
     expect(engine.requests, hasLength(1));
     final request = engine.requests.single;
@@ -271,7 +301,7 @@ void main() {
 
     await tester.ensureVisible(find.byKey(const Key('convert_button')));
     await tester.tap(find.byKey(const Key('convert_button')));
-    await settleFileIo(tester);
+    await pumpAsyncWork(tester);
 
     expect(find.text('Dosyanın üzerine yazılsın mı?'), findsOneWidget);
     expect(engine.requests, isEmpty);
@@ -280,7 +310,122 @@ void main() {
     await settleFileIo(tester);
 
     expect(engine.requests.single.overwrite, isTrue);
+    expect(
+      tester
+          .widget<CheckboxListTile>(find.byKey(const Key('overwrite_checkbox')))
+          .value,
+      isFalse,
+    );
   });
+
+  testWidgets('leaves existing output untouched when overwrite is rejected', (
+    tester,
+  ) async {
+    final existing = File(
+      '${tempDirectory.path}${Platform.pathSeparator}sample.docx',
+    )..writeAsStringSync('existing');
+    await pumpPage(tester);
+    await tester.tap(find.byKey(const Key('select_file_button')));
+    await settleFileIo(tester);
+
+    await tester.ensureVisible(find.byKey(const Key('convert_button')));
+    await tester.tap(find.byKey(const Key('convert_button')));
+    await pumpAsyncWork(tester);
+    await tester.tap(find.text('vazgeç'));
+    await settleFileIo(tester);
+
+    expect(engine.planRequests, hasLength(1));
+    expect(engine.requests, isEmpty);
+    expect(existing.readAsStringSync(), 'existing');
+  });
+
+  testWidgets('lists every multi-output collision before conversion', (
+    tester,
+  ) async {
+    final separator = Platform.pathSeparator;
+    engine.nextPlan = ConversionPlan(
+      success: true,
+      message: 'planned',
+      durationMs: 1,
+      outputPaths: [
+        '${tempDirectory.path}${separator}sample_page_001.png',
+        '${tempDirectory.path}${separator}sample_page_002.png',
+        '${tempDirectory.path}${separator}sample_page_003.png',
+      ],
+      conflictingOutputPaths: [
+        '${tempDirectory.path}${separator}sample_page_001.png',
+        '${tempDirectory.path}${separator}sample_page_003.png',
+      ],
+    );
+    await pumpPage(tester);
+    await tester.tap(find.byKey(const Key('select_file_button')));
+    await settleFileIo(tester);
+
+    final targetDropdown = tester.widget<DropdownButton<ConversionFormat>>(
+      find.descendant(
+        of: find.byKey(const Key('target_format')),
+        matching: find.byType(DropdownButton<ConversionFormat>),
+      ),
+    );
+    targetDropdown.onChanged!(ConversionFormat.png);
+    await tester.pump();
+    await tester.ensureVisible(find.byKey(const Key('convert_button')));
+    await tester.tap(find.byKey(const Key('convert_button')));
+    await pumpAsyncWork(tester);
+
+    expect(find.text('Dosyaların üzerine yazılsın mı?'), findsOneWidget);
+    expect(find.text('• sample_page_001.png'), findsOneWidget);
+    expect(find.text('• sample_page_003.png'), findsOneWidget);
+    await tester.tap(find.text('vazgeç'));
+    await settleFileIo(tester);
+    expect(engine.requests, isEmpty);
+  });
+
+  testWidgets('preserves the overwrite checkbox preference after conversion', (
+    tester,
+  ) async {
+    await pumpPage(tester);
+    await tester.tap(find.byKey(const Key('select_file_button')));
+    await settleFileIo(tester);
+    await tester.ensureVisible(find.byKey(const Key('overwrite_checkbox')));
+    await tester.tap(find.byKey(const Key('overwrite_checkbox')));
+    await tester.pump();
+
+    await tester.ensureVisible(find.byKey(const Key('convert_button')));
+    await tester.tap(find.byKey(const Key('convert_button')));
+    await settleFileIo(tester);
+
+    expect(find.text('Dosyanın üzerine yazılsın mı?'), findsNothing);
+    expect(engine.requests.single.overwrite, isTrue);
+    expect(
+      tester
+          .widget<CheckboxListTile>(find.byKey(const Key('overwrite_checkbox')))
+          .value,
+      isTrue,
+    );
+  });
+
+  testWidgets(
+    'reports a collision created after planning without overwriting',
+    (tester) async {
+      engine.nextConversionResult = const ConversionResult(
+        success: false,
+        message: 'The output file already exists.',
+        durationMs: 2,
+        errorCode: 'output_exists',
+      );
+      await pumpPage(tester);
+      await tester.tap(find.byKey(const Key('select_file_button')));
+      await settleFileIo(tester);
+      await tester.ensureVisible(find.byKey(const Key('convert_button')));
+      await tester.tap(find.byKey(const Key('convert_button')));
+      await settleFileIo(tester);
+
+      expect(engine.planRequests.single.overwrite, isFalse);
+      expect(engine.requests.single.overwrite, isFalse);
+      expect(find.textContaining('işlem sırasında oluşturuldu'), findsWidgets);
+    },
+  );
 
   testWidgets('keeps the action disabled while conversion is running', (
     tester,
@@ -405,6 +550,35 @@ void main() {
     );
     expect(updatedSource.value, ConversionFormat.pdf);
     expect(updatedTarget.value, ConversionFormat.docx);
+  });
+
+  testWidgets('filters the picker by source format and JPEG family', (
+    tester,
+  ) async {
+    final receivedFilters = <List<String>>[];
+    await pumpPage(
+      tester,
+      inputFilePicker: (extensions) async {
+        receivedFilters.add(List<String>.of(extensions));
+        return null;
+      },
+    );
+
+    await tester.tap(find.byKey(const Key('select_file_button')));
+    await settleFileIo(tester);
+    expect(receivedFilters.last, ['pdf']);
+
+    final sourceDropdown = tester.widget<DropdownButton<ConversionFormat>>(
+      find.descendant(
+        of: find.byKey(const Key('source_format')),
+        matching: find.byType(DropdownButton<ConversionFormat>),
+      ),
+    );
+    sourceDropdown.onChanged!(ConversionFormat.jpg);
+    await tester.pump();
+    await tester.tap(find.byKey(const Key('select_file_button')));
+    await settleFileIo(tester);
+    expect(receivedFilters.last, ['jpg', 'jpeg']);
   });
 
   testWidgets('auto-detects JPEG and shows an image icon', (tester) async {

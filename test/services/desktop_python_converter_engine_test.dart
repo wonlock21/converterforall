@@ -127,6 +127,18 @@ void main() {
         isRelease: false,
       );
       try {
+        final textPlan = await engine.planConversion(
+          ConversionRequest(
+            inputPath: source.path,
+            outputPath: textOutput.path,
+            sourceFormat: ConversionFormat.pdf,
+            targetFormat: ConversionFormat.txt,
+          ),
+        );
+        expect(textPlan.success, isTrue, reason: textPlan.message);
+        expect(textPlan.outputPaths, [textOutput.absolute.path]);
+        expect(textPlan.conflictingOutputPaths, isEmpty);
+
         final result = await engine
             .convert(
               ConversionRequest(

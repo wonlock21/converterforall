@@ -3,6 +3,8 @@ import 'conversion_models.dart';
 abstract interface class ConverterEngine {
   Future<List<SupportedConversion>> getSupportedConversions();
 
+  Future<ConversionPlan> planConversion(ConversionRequest request);
+
   Future<ConversionResult> convert(ConversionRequest request);
 
   Future<void> close();

@@ -14,6 +14,11 @@ class _ThemeTestEngine implements ConverterEngine {
   }
 
   @override
+  Future<ConversionPlan> planConversion(ConversionRequest request) {
+    throw UnimplementedError();
+  }
+
+  @override
   Future<List<SupportedConversion>> getSupportedConversions() async => const [
     SupportedConversion(
       source: ConversionFormat.pdf,

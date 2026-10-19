@@ -53,9 +53,11 @@ def smoke_test(worker_path: Path) -> None:
         image_source = temp_path / "source.png"
         image_output = temp_path / "image.pdf"
         raster_output = temp_path / "image.jpeg"
+        planned_output = temp_path / "planned.png"
         with pymupdf.open() as document:
             page = document.new_page()
             page.insert_text((72, 72), "Universal Converter worker smoke test")
+            document.new_page().insert_text((72, 72), "Second page")
             document.save(source)
         with Image.new("RGBA", (24, 12), (87, 88, 166, 128)) as image:
             image.save(image_source)
@@ -71,6 +73,15 @@ def smoke_test(worker_path: Path) -> None:
             "target_format": "docx",
             "input_path": str(source),
             "output_path": str(output),
+            "overwrite": False,
+        }
+        plan_request = {
+            "id": "pyinstaller-plan-test",
+            "action": "plan_conversion",
+            "source_format": "pdf",
+            "target_format": "png",
+            "input_path": str(source),
+            "output_path": str(planned_output),
             "overwrite": False,
         }
         image_request = {
@@ -97,6 +108,7 @@ def smoke_test(worker_path: Path) -> None:
                 json.dumps(request)
                 for request in (
                     capabilities_request,
+                    plan_request,
                     docx_request,
                     image_request,
                     raster_request,
@@ -110,16 +122,20 @@ def smoke_test(worker_path: Path) -> None:
             check=False,
         )
         protocol_lines = completed.stdout.splitlines()
-        if completed.returncode != 0 or len(protocol_lines) != 4:
+        if completed.returncode != 0 or len(protocol_lines) != 5:
             raise SystemExit(
                 "Frozen worker smoke test failed.\n"
                 f"exit={completed.returncode}\n"
                 f"stdout={completed.stdout}\n"
                 f"stderr={completed.stderr}"
             )
-        capabilities, docx_response, image_response, raster_response = map(
-            json.loads, protocol_lines
-        )
+        (
+            capabilities,
+            plan_response,
+            docx_response,
+            image_response,
+            raster_response,
+        ) = map(json.loads, protocol_lines)
         conversions = {
             (item.get("source_format"), item.get("target_format"))
             for item in capabilities.get("conversions", [])
@@ -133,6 +149,14 @@ def smoke_test(worker_path: Path) -> None:
         }
         if capabilities.get("id") != capabilities_request["id"] or not expected.issubset(conversions):
             raise SystemExit(f"Unexpected capabilities response: {capabilities}")
+        if (
+            plan_response.get("id") != plan_request["id"]
+            or plan_response.get("type") != "conversion_plan"
+            or plan_response.get("success") is not True
+            or len(plan_response.get("output_paths", [])) != 2
+            or plan_response.get("conflicting_output_paths") != []
+        ):
+            raise SystemExit(f"Unexpected conversion plan: {plan_response}")
         if docx_response.get("id") != docx_request["id"] or docx_response.get("success") is not True:
             raise SystemExit(f"Unexpected frozen worker response: {docx_response}")
         if image_response.get("id") != image_request["id"] or image_response.get("success") is not True:

@@ -13,6 +13,17 @@ class UnsupportedConverterEngine implements ConverterEngine {
   Future<void> close() async {}
 
   @override
+  Future<ConversionPlan> planConversion(ConversionRequest request) async {
+    return ConversionPlan(
+      success: false,
+      message: '$platformName için dönüştürme motoru henüz eklenmedi.',
+      durationMs: 0,
+      inputPath: request.inputPath,
+      errorCode: 'platform_not_supported',
+    );
+  }
+
+  @override
   Future<ConversionResult> convert(ConversionRequest request) async {
     return ConversionResult(
       success: false,

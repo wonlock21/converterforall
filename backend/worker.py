@@ -54,7 +54,7 @@ class ConversionWorker:
                 "message": "Supported conversions retrieved successfully.",
                 "error": None,
             }
-        if action != "convert":
+        if action not in {"convert", "plan_conversion"}:
             return self._error_response(
                 request_id,
                 "unsupported_action",
@@ -75,14 +75,17 @@ class ConversionWorker:
             )
 
         try:
-            result = self._engine.convert(
-                ConversionRequest(
-                    input_path=Path(input_path),
-                    output_path=Path(output_path),
-                    source_format=source_format,
-                    target_format=target_format,
-                    overwrite=overwrite,
-                )
+            request = ConversionRequest(
+                input_path=Path(input_path),
+                output_path=Path(output_path),
+                source_format=source_format,
+                target_format=target_format,
+                overwrite=overwrite,
+            )
+            result = (
+                self._engine.plan(request)
+                if action == "plan_conversion"
+                else self._engine.convert(request)
             )
         except Exception:
             LOGGER.exception("Unhandled conversion engine error")
@@ -93,7 +96,11 @@ class ConversionWorker:
             )
         return {
             "id": request_id,
-            "type": "conversion_result",
+            "type": (
+                "conversion_plan"
+                if action == "plan_conversion"
+                else "conversion_result"
+            ),
             **result.to_dict(),
         }
 

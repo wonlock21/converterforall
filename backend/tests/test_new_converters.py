@@ -121,6 +121,39 @@ def test_multi_page_output_collision_requires_overwrite(tmp_path: Path) -> None:
     assert collision.read_bytes() != b"existing"
 
 
+def test_multi_page_plan_reports_every_output_collision(tmp_path: Path) -> None:
+    source = tmp_path / "document.pdf"
+    target = tmp_path / "document.png"
+    create_pdf(source, ["one", "two", "three"])
+    collisions = [
+        tmp_path / "document_page_001.png",
+        tmp_path / "document_page_003.png",
+    ]
+    for collision in collisions:
+        collision.write_bytes(b"existing")
+
+    plan = create_default_engine().plan(
+        ConversionRequest(
+            input_path=source,
+            output_path=target,
+            source_format="pdf",
+            target_format="png",
+        )
+    )
+
+    assert plan.success, plan.message
+    assert [Path(path).name for path in plan.output_paths] == [
+        "document_page_001.png",
+        "document_page_002.png",
+        "document_page_003.png",
+    ]
+    assert [Path(path).name for path in plan.conflicting_output_paths] == [
+        "document_page_001.png",
+        "document_page_003.png",
+    ]
+    assert all(path.read_bytes() == b"existing" for path in collisions)
+
+
 def test_pdf_image_failure_removes_all_partial_outputs(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

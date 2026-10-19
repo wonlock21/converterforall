@@ -64,6 +64,41 @@ class ConversionRequest {
   final bool overwrite;
 }
 
+class ConversionPlan {
+  const ConversionPlan({
+    required this.success,
+    required this.message,
+    required this.durationMs,
+    this.inputPath,
+    this.outputPaths = const [],
+    this.conflictingOutputPaths = const [],
+    this.errorCode,
+  });
+
+  factory ConversionPlan.fromJson(Map<String, dynamic> json) {
+    final error = json['error'];
+    return ConversionPlan(
+      success: json['success'] == true,
+      message: json['message'] as String? ?? 'Dönüşüm planı alınamadı.',
+      durationMs: (json['duration_ms'] as num?)?.toInt() ?? 0,
+      inputPath: json['input_path'] as String?,
+      outputPaths: _stringList(json['output_paths']),
+      conflictingOutputPaths: _stringList(json['conflicting_output_paths']),
+      errorCode: error is Map<String, dynamic>
+          ? error['code'] as String?
+          : null,
+    );
+  }
+
+  final bool success;
+  final String message;
+  final int durationMs;
+  final String? inputPath;
+  final List<String> outputPaths;
+  final List<String> conflictingOutputPaths;
+  final String? errorCode;
+}
+
 class ConversionResult {
   const ConversionResult({
     required this.success,
@@ -78,10 +113,7 @@ class ConversionResult {
   factory ConversionResult.fromJson(Map<String, dynamic> json) {
     final error = json['error'];
     final legacyOutput = json['output_path'] as String?;
-    final rawOutputs = json['output_paths'];
-    final outputs = rawOutputs is List
-        ? rawOutputs.whereType<String>().toList(growable: false)
-        : <String>[];
+    final outputs = _stringList(json['output_paths']);
     return ConversionResult(
       success: json['success'] == true,
       message: json['message'] as String? ?? 'Dönüştürme sonucu alınamadı.',
@@ -104,4 +136,10 @@ class ConversionResult {
   final String? outputPath;
   final List<String> outputPaths;
   final String? errorCode;
+}
+
+List<String> _stringList(Object? value) {
+  return value is List
+      ? value.whereType<String>().toList(growable: false)
+      : const [];
 }
